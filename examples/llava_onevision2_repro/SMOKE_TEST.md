@@ -17,21 +17,17 @@ Video-MME `fFjv93ACGo8` question `001-1` (74s).
 | videomme | 74s | frames (64f, closest match) | 9216 | 0.00s | 0.26s | 3.19s | **3.45s** | 3.45s | 1.00x | 1.00x |
 | videomme | 74s | codec | 11520 | 1.68s | 0.73s | 4.47s | **6.88s** | 5.20s | 1.99x | 1.51x |
 
-**Summary**: frames run at 64 frames to roughly match codec's token
-budget (12288 tokens, an exact match for EgoSchema; 9216 for Video-MME —
-token counts aren't perfectly controllable per-video since resolution
-varies). Even at comparable token counts and **after subtracting
-transcode** (E2E−transcode), codec is still slower: 4.77s vs. 4.37s for
-EgoSchema, 5.20s vs. 3.45s for Video-MME (codec still has ~25% more
-tokens there). So the token-budget gap explains some but not all of
-codec's slowdown — canvas packing/image-processing (`processor call`)
-is comparable to frames' raw video decode, but codec's VLM pass runs
-consistently slower even at comparable token counts. Transcode itself is
-a pure artifact of the local videos being `mpeg4` not H264/HEVC — an
-H264/HEVC-native corpus skips it entirely. `codec`'s E2E also varied
-run-to-run (11.3s → 6.9s for the same EgoSchema sample across runs),
-likely OS page-cache/CPU contention noise in the `cv-preinfer`
-subprocess. n=1/cell: illustrative, not a throughput benchmark.
+**Summary**: transcode is codec's single biggest overhead — 57% of E2E
+for EgoSchema (6.25s/11.02s), 24% for Video-MME (1.68s/6.88s) — and
+exists *only* because these videos are `mpeg4`, not H264/HEVC (which
+`cv-preinfer` requires); on an H264/HEVC-native corpus it's zero. It
+also scales with video length (6.25s @180s vs. 1.68s @74s) and is
+CPU-bound (`ffmpeg -preset fast`), so a faster preset/hardware encoding
+would shrink it further. Even with transcode removed, codec is still
+1.1–1.5x slower than frames at matched token budgets — VLM runs
+consistently slower per comparable token, while canvas packing is
+comparable to frames' video decode. n=1/cell: illustrative, not a
+throughput benchmark.
 
 <details>
 <summary><b>Reproduce</b> (Docker env, persistent GPU allocation, notes)</summary>
