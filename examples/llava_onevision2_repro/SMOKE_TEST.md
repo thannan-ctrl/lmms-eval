@@ -90,3 +90,13 @@ plus a higher VLM cost since `codec-target-canvas=64` produces more
 tokens than the 32-frame budget used for `frames` (not a matched token
 budget — noted, not controlled for). n=1 per cell: illustrative
 single-sample timings, not a throughput benchmark.
+
+Both source videos here happen to be `mpeg4` (MPEG-4 part 2) — an older
+codec, not what `cv-preinfer` requires — which is why the transcode step
+exists at all. If the videos had originally been encoded/ingested as
+H264 or HEVC (as most modern video corpora are), that 1.6–6.5s transcode
+cost disappears entirely: the codec backend would read the source file
+directly, so its E2E latency would drop to roughly `preprocess + vlm`
+(e.g. ~4.8s instead of 11.3s for the EgoSchema sample). The transcode
+overhead is purely an artifact of this dataset's source encoding, not an
+inherent cost of the codec backend.
