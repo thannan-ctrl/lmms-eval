@@ -19,31 +19,31 @@ a separate tool called `cv-preinfer`), in the exact Docker setup from
 
 ![latency breakdown](latency_breakdown.png)
 
-**Terms**: `cv_preinfer` is the external tool codec calls to do the
-video prep — it looks at candidate frames and picks/packs the best ones
-into canvases. `512→64 canvases` means it starts by scanning 512 frames
-spread across the video, then boils those down to the 64 "canvas"
-images that actually get sent to the model.
+### What "512→64 canvases" actually means
 
-**Where the actual video decoding happens** — it's not one place:
-- `transcode`: `ffmpeg` decodes the original `mpeg4` file and re-encodes
-  it to H264.
-- `cv_preinfer`: reads that H264 file, and decodes the pixels of
-  whichever frames it ends up keeping (to write them out as canvas
-  images). Likely why it needs H264/HEVC specifically — its frame-scoring
-  step probably reads compressed-bitstream stats directly, which only
-  H264/HEVC support.
-- `fetch_video` (frames backend only): `decord` decodes the *original*
-  `mpeg4` file directly — never touches the H264 copy at all.
+![how codec picks its canvases](codec_canvas_concept.png)
 
-So the same `mpeg4` video gets decoded twice, independently, by two
-different tools that don't share any work — `ffmpeg` for codec's path,
-`decord` for frames'.
+`cv_preinfer` is a separate, pip-installed tool (`codec-video-prep-legacy-exact`)
+that codec shells out to for video prep — this repo just calls it and
+hands it a video, it doesn't pick frames itself. In one call it:
 
-**Where "which frames to keep" gets decided**: not in this repo at all
-— it's inside `cv-preinfer` itself (a separate pip-installed tool), in
-its own `score_bitcost` step. This repo just calls that tool and hands
-it a video; it doesn't pick frames itself.
+1. Uniformly samples **512 candidate frames** from the video.
+2. Scores each one for "readiness" using **bit-cost and motion-vector
+   data read straight from the H264 bitstream** — no full pixel decode
+   needed for scoring, which is why it only accepts H264/HEVC input
+   (per the companion paper, [*OneVision-Encoder: Codec-Aligned
+   Sparsity*](https://arxiv.org/abs/2602.08683) — the idea is that a
+   codec's own compression decisions already mark where the
+   information-dense parts of a video are, so reuse that instead of
+   redoing the analysis from scratch).
+3. Keeps the best-scoring **64 frames** (4 out of every 32-frame group),
+   fully decodes just those, and packs them into canvas images.
+
+Two separate video decodes happen in this pipeline, in two different
+tools that share no work: `ffmpeg` decodes the original `mpeg4` and
+re-encodes it to H264 (the `transcode` stage), while `decord` decodes
+the *original* `mpeg4` directly for the `frames` backend's `fetch_video`
+stage — codec's path never touches what `decord` does, and vice versa.
 
 ## Bottom line: codec is a lot slower, mostly one extra step
 
