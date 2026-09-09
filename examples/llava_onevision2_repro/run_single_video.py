@@ -27,6 +27,29 @@ import cv2
 import torch
 
 
+_cv_preinfer_timing: dict[str, float] = {}
+
+
+def instrument_cv_preinfer():
+    """Monkeypatch `_process_codec_video_tuned` (the module-level function
+    that shells out to the `cv-preinfer` CLI, used when
+    LLAVA_CODEC_ONLINE_TUNED=1) to time just the subprocess call, so we can
+    split codec's `processor_latency_s` into
+    cv-preinfer-subprocess vs. canvas-image-processing/tokenize.
+    """
+    from lmms_eval.models.chat import llava_onevision2 as l2mod
+
+    original = l2mod._process_codec_video_tuned
+
+    def timed(video_url: str, cfg):
+        t0 = time.time()
+        result = original(video_url, cfg)
+        _cv_preinfer_timing["last_s"] = time.time() - t0
+        return result
+
+    l2mod._process_codec_video_tuned = timed
+
+
 def video_duration_seconds(video_path: str) -> float:
     cap = cv2.VideoCapture(video_path)
     try:
@@ -162,12 +185,15 @@ def run_one(model, sample: dict, task_hint: str, video_path: str | None = None, 
     # Stage 3: processor call. For "codec" this is where cv-preinfer canvas
     # packing + image processing of the canvases happens (the heavy part);
     # for "frames" it's just image-processing the already-extracted frames.
+    cv_preinfer_latency_s = None
     if model.video_backend == "codec":
         # `text` is already a list[str] (batch of 1) from apply_chat_template
         # above -- don't wrap it again.
+        _cv_preinfer_timing.pop("last_s", None)
         inputs = model._codec_call_processor(
             texts=text, flat_videos=video_urls, subtitle_dicts=sub_dicts
         )
+        cv_preinfer_latency_s = _cv_preinfer_timing.pop("last_s", None)
     else:
         inputs = model.processor(
             text=text,
@@ -218,6 +244,13 @@ def run_one(model, sample: dict, task_hint: str, video_path: str | None = None, 
     pred = m.group(1) if m else None
     preprocess_latency_s = t_pre_end - t_pre_start
     vlm_latency_s = t_vlm_end - t_vlm_start
+    # Split codec's processor_latency_s into the cv-preinfer subprocess call
+    # vs. everything after it (canvas image-processing + position/tokenize).
+    canvas_postproc_latency_s = (
+        processor_latency_s - cv_preinfer_latency_s
+        if cv_preinfer_latency_s is not None
+        else None
+    )
     return {
         "prompt": prompt,
         "response": response,
@@ -227,6 +260,8 @@ def run_one(model, sample: dict, task_hint: str, video_path: str | None = None, 
         "build_messages_latency_s": build_messages_latency_s,
         "chat_template_latency_s": chat_template_latency_s,
         "processor_latency_s": processor_latency_s,
+        "cv_preinfer_latency_s": cv_preinfer_latency_s,
+        "canvas_postproc_latency_s": canvas_postproc_latency_s,
         "preprocess_latency_s": preprocess_latency_s,
         "vlm_latency_s": vlm_latency_s,
         "e2e_latency_s": transcode_latency_s + preprocess_latency_s + vlm_latency_s,
@@ -267,6 +302,8 @@ def main():
     backends = [b.strip() for b in args.backends.split(",") if b.strip()]
 
     from lmms_eval.models.chat.llava_onevision2 import Llava_OneVision2
+
+    instrument_cv_preinfer()
 
     print(f"[smoke-test] loading {args.model} ...")
     model = Llava_OneVision2(
@@ -316,11 +353,17 @@ def main():
             )
             print(f"--- model response ---\n{result['response']}")
             print(f"predicted: {result['pred']}  ground_truth: {result['gt']}")
+            processor_breakdown = (
+                f" [cv_preinfer={result['cv_preinfer_latency_s']:.2f}s "
+                f"canvas_postproc={result['canvas_postproc_latency_s']:.2f}s]"
+                if result["cv_preinfer_latency_s"] is not None
+                else ""
+            )
             print(
                 f"transcode={result['transcode_latency_s']:.2f}s  "
                 f"build_messages={result['build_messages_latency_s']:.2f}s  "
                 f"chat_template={result['chat_template_latency_s']:.3f}s  "
-                f"processor={result['processor_latency_s']:.2f}s  "
+                f"processor={result['processor_latency_s']:.2f}s{processor_breakdown}  "
                 f"(preprocess_total={result['preprocess_latency_s']:.2f}s)  "
                 f"vlm={result['vlm_latency_s']:.2f}s  "
                 f"e2e={result['e2e_latency_s']:.2f}s  "
