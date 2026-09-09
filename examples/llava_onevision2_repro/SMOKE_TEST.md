@@ -32,15 +32,44 @@ n=1/cell: illustrative, not a throughput benchmark.
 `ffmpeg` encodes every pixel. Total pixels (frames × area) works out to
 3.23x, much closer to the observed gap than duration alone.
 
-**Codec's processor call is largely duration-independent — confirmed by
-splitting it.** Instrumenting the `cv-preinfer` subprocess call
-separately from the rest (canvas image-processing + position/tokenize)
-shows both halves stay flat regardless of video length: EgoSchema
-(180s) is `cv_preinfer=0.41s, canvas_postproc=0.64s`; Video-MME (74s,
-2.4x shorter) is `cv_preinfer=0.51s, canvas_postproc=0.61s` — almost
-identical. So it isn't one specific fixed-cost step dominating; the
-whole codec preprocessing path just doesn't scale down with shorter
-video the way frames' raw decode does.
+**Full stage breakdown (`run_latency_deep_dive.py`, one extra level
+below the table above)** — frames split into `fetch_video` (decord
+decode+resize) vs. `image_processor` (PIL frames → tensors); codec split
+into `cv_preinfer` (the CLI subprocess) vs. its own `image_processor`
+(canvas JPEGs → tensors) vs. `other` (padding drop + position calc +
+tokenize, not split further):
+
+| Sample | Backend | Transcode | fetch_video | cv_preinfer | image_processor | other | VLM | Total |
+|---|---|--:|--:|--:|--:|--:|--:|--:|
+| egoschema (180s) | frames | 0.00s | 0.22s | – | 0.10s | – | 3.74s | 4.06s |
+| egoschema (180s) | codec | 6.15s | – | 0.49s | 0.06s | 0.59s | 4.06s | 11.36s |
+| videomme (74s) | frames | 0.00s | 0.18s | – | 0.07s | – | 3.11s | 3.36s |
+| videomme (74s) | codec | 1.66s | – | 0.38s | 0.05s | 0.53s | 4.58s | 7.21s |
+
+![latency breakdown](latency_breakdown.png)
+
+Three things fall out of this:
+- **`fetch_video` (decord decode) is cheap and barely duration-dependent**
+  (0.22s @180s vs. 0.18s @74s) — decord seeks directly to the 64 sampled
+  frame indices rather than decoding the whole video, so raw decode was
+  never actually the bottleneck for `frames`.
+- **Codec's own `image_processor` (canvas → tensors) is tiny** (0.05–0.06s),
+  even cheaper than frames' equivalent step — canvas packing itself
+  isn't the problem either.
+- **The real non-transcode, non-VLM bottleneck is codec's `other` bucket**
+  (0.53–0.59s, comparable in size to `cv_preinfer`), and it's just as
+  flat across the 2.4x duration difference as everything else in the
+  codec path. This bundles `drop_padding_canvases` + position computation
+  + tokenizing the rewritten (timestamp-injected) prompt — not split
+  further here, so which of those three actually dominates is still
+  open.
+
+Bottom line: **transcode dominates codec's overhead by far** (6.15s/1.66s,
+larger than every other codec-side stage combined); past that, no single
+remaining stage explains the rest — `cv_preinfer` and `other` are both
+mid-sized and both duration-independent, and codec's VLM pass itself
+also runs consistently slower than frames' even at similar token counts
+(see the token-matched comparison above).
 
 <details>
 <summary><b>Reproduce</b> (Docker env, persistent GPU allocation, notes)</summary>
