@@ -40,6 +40,11 @@ So the same `mpeg4` video gets decoded twice, independently, by two
 different tools that don't share any work — `ffmpeg` for codec's path,
 `decord` for frames'.
 
+**Where "which frames to keep" gets decided**: not in this repo at all
+— it's inside `cv-preinfer` itself (a separate pip-installed tool), in
+its own `score_bitcost` step. This repo just calls that tool and hands
+it a video; it doesn't pick frames itself.
+
 ## Bottom line: codec is a lot slower, mostly one extra step
 
 - **Biggest cost: converting the video format.** Our test videos are an
