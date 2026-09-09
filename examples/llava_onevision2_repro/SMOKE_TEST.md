@@ -27,15 +27,10 @@ token, while canvas packing is comparable to frames' video decode.
 n=1/cell: illustrative, not a throughput benchmark.
 
 **Note**: EgoSchema's transcode takes 3.72x longer than Video-MME's
-(6.25s vs. 1.68s), even though EgoSchema's video is only 2.42x longer
-(180s vs. 74.3s). The extra gap comes down to resolution — `ffmpeg`
-(CPU-bound, `-preset fast`) has to encode every pixel of every frame,
-and EgoSchema's video isn't just longer, it's also taller (448×336 vs.
-448×252). Multiply frame count by frame area and EgoSchema works out to
-3.23x more total pixels, which lines up with the 3.72x time gap much
-better than duration alone does — the small remainder is in line with
-the run-to-run noise we saw elsewhere. A faster `ffmpeg` preset or
-hardware encoding would bring this down regardless.
+(6.25s vs. 1.68s) despite the video being only 2.42x longer (180s vs.
+74.3s) — because it's also taller (448×336 vs. 448×252), and CPU-bound
+`ffmpeg` encodes every pixel. Total pixels (frames × area) works out to
+3.23x, much closer to the observed gap than duration alone.
 
 <details>
 <summary><b>Reproduce</b> (Docker env, persistent GPU allocation, notes)</summary>
