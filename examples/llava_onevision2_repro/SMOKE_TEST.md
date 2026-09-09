@@ -19,6 +19,12 @@ a separate tool called `cv-preinfer`), in the exact Docker setup from
 
 ![latency breakdown](latency_breakdown.png)
 
+**Terms**: `cv_preinfer` is the external tool codec calls to do the
+video prep — it looks at candidate frames and picks/packs the best ones
+into canvases. `512→64 canvases` means it starts by scanning 512 frames
+spread across the video, then boils those down to the 64 "canvas"
+images that actually get sent to the model.
+
 ## Bottom line: codec is a lot slower, mostly one extra step
 
 - **Biggest cost: converting the video format.** Our test videos are an
