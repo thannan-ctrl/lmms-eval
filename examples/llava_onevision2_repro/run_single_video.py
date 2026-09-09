@@ -28,6 +28,16 @@ import torch
 
 
 _cv_preinfer_timing: dict[str, float] = {}
+_fine_timing: dict[str, float] = {}
+
+
+def _timed_fn(name: str, fn):
+    def wrapper(*a, **kw):
+        t0 = time.time()
+        out = fn(*a, **kw)
+        _fine_timing[name] = _fine_timing.get(name, 0.0) + (time.time() - t0)
+        return out
+    return wrapper
 
 
 def instrument_cv_preinfer():
@@ -48,6 +58,40 @@ def instrument_cv_preinfer():
         return result
 
     l2mod._process_codec_video_tuned = timed
+
+
+def instrument_fine_grained():
+    """Extra split beyond instrument_cv_preinfer(): times `fetch_video`
+    (frames backend's decord decode) separately from the rest of
+    `_build_messages` (PIL conversion etc.), via `_fine_timing['fetch_video']`.
+    """
+    import qwen_vl_utils
+
+    qwen_vl_utils.fetch_video = _timed_fn("fetch_video", qwen_vl_utils.fetch_video)
+    # `_process_video_with_timestamp` does `from qwen_vl_utils import
+    # fetch_video` locally each call, so patching the qwen_vl_utils module
+    # attribute above is what actually takes effect there.
+
+
+def instrument_codec_image_processor(pretrained: str) -> bool:
+    """Times the checkpoint-bundled `codec_image_processor_outputs` (canvas
+    JPEGs -> tensors) separately from cv-preinfer and everything else inside
+    codec's processor call, via `_fine_timing['codec_image_processor']`.
+    Call once, after the model is loaded (needs a resolved pretrained path).
+    """
+    from transformers.dynamic_module_utils import get_class_from_dynamic_module
+
+    module_path = f"{pretrained}--codec_video_processing_llava_onevision2.codec_image_processor_outputs"
+    fn = get_class_from_dynamic_module(module_path, pretrained)
+    import sys
+
+    mod = sys.modules.get(fn.__module__)
+    if mod is not None and hasattr(mod, "codec_image_processor_outputs"):
+        mod.codec_image_processor_outputs = _timed_fn(
+            "codec_image_processor", mod.codec_image_processor_outputs
+        )
+        return True
+    return False
 
 
 def video_duration_seconds(video_path: str) -> float:
@@ -172,9 +216,11 @@ def run_one(model, sample: dict, task_hint: str, video_path: str | None = None, 
     # Stage 1: _build_messages. For "frames" this does the actual video
     # decode + per-frame extraction/resize (qwen_vl_utils fetch_video); for
     # "codec" it's cheap (just collects video URLs, no decode yet).
+    _fine_timing.pop("fetch_video", None)
     t0 = time.time()
     hf_messages, pil_images, video_urls, sub_dicts = model._build_messages(cm, task=task_hint)
     t1 = time.time()
+    fetch_video_latency_s = _fine_timing.pop("fetch_video", None)
 
     # Stage 2: chat-template rendering (string templating, no video work).
     text = model.processor.apply_chat_template(
@@ -186,14 +232,17 @@ def run_one(model, sample: dict, task_hint: str, video_path: str | None = None, 
     # packing + image processing of the canvases happens (the heavy part);
     # for "frames" it's just image-processing the already-extracted frames.
     cv_preinfer_latency_s = None
+    codec_image_processor_latency_s = None
     if model.video_backend == "codec":
         # `text` is already a list[str] (batch of 1) from apply_chat_template
         # above -- don't wrap it again.
         _cv_preinfer_timing.pop("last_s", None)
+        _fine_timing.pop("codec_image_processor", None)
         inputs = model._codec_call_processor(
             texts=text, flat_videos=video_urls, subtitle_dicts=sub_dicts
         )
         cv_preinfer_latency_s = _cv_preinfer_timing.pop("last_s", None)
+        codec_image_processor_latency_s = _fine_timing.pop("codec_image_processor", None)
     else:
         inputs = model.processor(
             text=text,
@@ -251,6 +300,29 @@ def run_one(model, sample: dict, task_hint: str, video_path: str | None = None, 
         if cv_preinfer_latency_s is not None
         else None
     )
+
+    # Unified fine-grained breakdown, comparable across both backends:
+    #   image_processor_s: frames = the whole processor call (tensor-izes
+    #     already-extracted frames); codec = codec_image_processor_outputs
+    #     only (tensor-izes the packed canvases).
+    #   other_s: frames = build_messages minus fetch_video (PIL conversion
+    #     etc.); codec = canvas_postproc minus codec_image_processor
+    #     (padding drop + positions + tokenize).
+    if model.video_backend == "codec":
+        image_processor_latency_s = codec_image_processor_latency_s
+        other_latency_s = (
+            canvas_postproc_latency_s - codec_image_processor_latency_s
+            if canvas_postproc_latency_s is not None and codec_image_processor_latency_s is not None
+            else None
+        )
+    else:
+        image_processor_latency_s = processor_latency_s
+        other_latency_s = (
+            build_messages_latency_s - fetch_video_latency_s
+            if fetch_video_latency_s is not None
+            else None
+        )
+
     return {
         "prompt": prompt,
         "response": response,
@@ -258,10 +330,13 @@ def run_one(model, sample: dict, task_hint: str, video_path: str | None = None, 
         "backend": model.video_backend,
         "transcode_latency_s": transcode_latency_s,
         "build_messages_latency_s": build_messages_latency_s,
+        "fetch_video_latency_s": fetch_video_latency_s,
         "chat_template_latency_s": chat_template_latency_s,
         "processor_latency_s": processor_latency_s,
         "cv_preinfer_latency_s": cv_preinfer_latency_s,
         "canvas_postproc_latency_s": canvas_postproc_latency_s,
+        "image_processor_latency_s": image_processor_latency_s,
+        "other_latency_s": other_latency_s,
         "preprocess_latency_s": preprocess_latency_s,
         "vlm_latency_s": vlm_latency_s,
         "e2e_latency_s": transcode_latency_s + preprocess_latency_s + vlm_latency_s,
@@ -304,6 +379,7 @@ def main():
     from lmms_eval.models.chat.llava_onevision2 import Llava_OneVision2
 
     instrument_cv_preinfer()
+    instrument_fine_grained()
 
     print(f"[smoke-test] loading {args.model} ...")
     model = Llava_OneVision2(
@@ -318,6 +394,7 @@ def main():
         video_backend=backends[0],
         codec_target_canvas=args.codec_target_canvas,
     )
+    instrument_codec_image_processor(args.model)
 
     samples = {
         "egoschema": load_egoschema_sample(data_root),
