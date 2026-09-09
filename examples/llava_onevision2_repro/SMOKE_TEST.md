@@ -20,14 +20,18 @@ Video-MME `fFjv93ACGo8` question `001-1` (74s).
 **Summary**: transcode is codec's single biggest overhead — 57% of E2E
 for EgoSchema (6.25s/11.02s), 24% for Video-MME (1.68s/6.88s) — and
 exists *only* because these videos are `mpeg4`, not H264/HEVC (which
-`cv-preinfer` requires); on an H264/HEVC-native corpus it's zero. It
-also scales with video length (6.25s @180s vs. 1.68s @74s) and is
-CPU-bound (`ffmpeg -preset fast`), so a faster preset/hardware encoding
-would shrink it further. Even with transcode removed, codec is still
-1.1–1.5x slower than frames at matched token budgets — VLM runs
-consistently slower per comparable token, while canvas packing is
-comparable to frames' video decode. n=1/cell: illustrative, not a
-throughput benchmark.
+`cv-preinfer` requires); on an H264/HEVC-native corpus it's zero. It's
+CPU-bound (`ffmpeg -preset fast`) and scales with total pixels encoded
+(frames × width × height), not just duration: EgoSchema is 2.42x
+longer than Video-MME (180s vs. 74.3s) but also taller (448×336 vs.
+448×252, 1.33x), so it has 3.23x more total pixels — closely tracking
+the observed 3.72x transcode-time ratio (6.25s vs. 1.68s), with the
+remaining gap consistent with run-to-run noise. A faster preset or
+hardware encoding would shrink transcode further either way. Even with
+transcode removed, codec is still 1.1–1.5x slower than frames at
+matched token budgets — VLM runs consistently slower per comparable
+token, while canvas packing is comparable to frames' video decode.
+n=1/cell: illustrative, not a throughput benchmark.
 
 <details>
 <summary><b>Reproduce</b> (Docker env, persistent GPU allocation, notes)</summary>
