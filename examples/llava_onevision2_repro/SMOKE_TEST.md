@@ -78,11 +78,23 @@ also runs consistently slower than frames' even at similar token counts
 (see the token-matched comparison above).
 
 **Which stages track the raw video vs. the frame/canvas count:**
-- *Scales with source video (duration × resolution)*: `transcode` only,
-  confirmed above. (`cv_preinfer` looked flat here too, but a separate,
+- *Scales with source video (duration × resolution)*: `transcode`,
+  confirmed above. `cv_preinfer` looked flat here too, but a separate,
   larger run across many more EgoSchema videos shows it actually varies
-  substantially across videos — these two just happened to be similar;
-  not written up in this doc yet.)
+  substantially — these two just happened to be similar; not written up
+  in this doc yet. The mechanism is now confirmed, not just a hunch: per
+  the checkpoint's bundled `CodecConfig`,
+  `num_sampled_frames() = (target_canvas // images_per_group) * group_size`
+  — with the defaults used here (`group_size=32`, `images_per_group=4`,
+  `target_canvas=64`) that's `(64//4)*32 = 512`, a **fixed** candidate-frame
+  count set purely by config, clamped down only if the video has fewer
+  than 512 total frames (neither of these two does — EgoSchema has 5400,
+  Video-MME has 2227). So the *target count* doesn't depend on video
+  length. But `cv-preinfer` still has to uniformly seek to and decode 512
+  timestamps spread across the video's actual duration, and that seek/decode
+  *cost* does scale with length and resolution (further apart in a longer
+  video, more data per seek in a higher-resolution one) — the sampling
+  target is length-independent, the cost of hitting it isn't.
 - *Scales with `--num-frames`/`--codec-target-canvas` (both fixed at 64
   here), not duration*: `fetch_video` (decord seeks straight to the 64
   sampled indices, doesn't decode the whole file), both `image_processor`
