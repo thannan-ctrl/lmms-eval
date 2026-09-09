@@ -7,21 +7,33 @@ environment from the top-level `README.md` § 1. Script:
 
 ## Results (2026-09-09, A100x2)
 
-| Sample | Backend | Predicted | GT | Transcode | Preprocess | VLM | **E2E** | vs. frames |
-|---|---|:-:|:-:|--:|--:|--:|--:|--:|
-| `egoschema/0074f737...` | frames | D | D ✅ | 0.00s | 0.38s | 2.59s | **2.97s** | 1.00x |
-| `egoschema/0074f737...` | codec | D | D ✅ | 6.50s | 0.85s | 3.99s | **11.34s** | 3.82x |
-| `videomme/fFjv93ACGo8/001-1` | frames | A | C ❌ | 0.00s | 0.12s | 1.64s | **1.76s** | 1.00x |
-| `videomme/fFjv93ACGo8/001-1` | codec | A | C ❌ | 1.60s | 7.60s | 4.48s | **13.68s** | 7.76x |
+| Sample | Dur | Backend | Tokens | Predicted | GT | Transcode | Preprocess | VLM | **E2E** | vs. frames |
+|---|--:|---|--:|:-:|:-:|--:|--:|--:|--:|--:|
+| `egoschema/0074f737...` | 180s | frames | 6144 | D | D ✅ | 0.00s | 0.36s | 2.60s | **2.95s** | 1.00x |
+| `egoschema/0074f737...` | 180s | codec | 12288 | D | D ✅ | 6.25s | 0.77s | 4.00s | **11.02s** | 3.73x |
+| `videomme/fFjv93ACGo8/001-1` | 74s | frames | 4608 | A | C ❌ | 0.00s | 0.12s | 1.64s | **1.76s** | 1.00x |
+| `videomme/fFjv93ACGo8/001-1` | 74s | codec | 11520 | A | C ❌ | 1.68s | 0.73s | 4.47s | **6.88s** | 3.90x |
+
+Preprocess breakdown (all sub-ms/negligible stages omitted — `_build_messages` frame-decode dominates for `frames`, the processor call dominates for `codec`):
+
+| Sample | Backend | build_messages | chat_template | processor call |
+|---|---|--:|--:|--:|
+| egoschema | frames | 0.30s | 0.007s | 0.05s |
+| egoschema | codec | 0.00s | 0.000s | 0.77s (cv-preinfer + image proc) |
+| videomme | frames | 0.09s | 0.000s | 0.03s |
+| videomme | codec | 0.00s | 0.000s | 0.73s (cv-preinfer + image proc) |
 
 **Summary**: predictions match between backends (same right/wrong per
-sample); codec is 3.8–7.8x slower end-to-end, mostly from preprocessing
-(canvas packing) and the transcode step, plus a higher VLM cost since
-`codec-target-canvas=64` yields more tokens than the 32-frame budget
-used for `frames` (not a matched budget). The transcode cost (1.6–6.5s)
-is an artifact of the local videos being `mpeg4`, not H264/HEVC — with
-H264/HEVC-native sources it disappears, so codec E2E would drop to
-roughly `preprocess + vlm` (~4.8s instead of 11.3s for EgoSchema).
+sample). Codec uses ~2x the video tokens of frames here (target_canvas=64
+vs. a 32-frame budget — not a matched token budget) and is 3.7–3.9x
+slower end-to-end, split roughly evenly between the one-time transcode
+and a heavier VLM pass; codec's own canvas-packing/image-processing step
+(`processor call`) is actually comparable to or cheaper than frames'
+raw video decode. `codec`'s E2E varied run-to-run (11.3s vs. 6.9s across
+two runs of the same EgoSchema sample) — likely OS page-cache/CPU
+contention noise in `cv-preinfer`'s subprocess, not a deterministic cost.
+The transcode cost is an artifact of the local videos being `mpeg4`, not
+H264/HEVC — with H264/HEVC-native sources it disappears entirely.
 n=1/cell: illustrative, not a throughput benchmark.
 
 <details>
