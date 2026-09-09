@@ -25,8 +25,20 @@ drop + position calc + tokenize, not split further):
 
 ![latency breakdown](latency_breakdown.png)
 
+**`--num-frames` vs. `--codec-target-canvas`**: `--num-frames` (`max_num_frames`)
+only feeds into the `frames` backend's frame sampling
+(`_process_video_with_timestamp`); it's read nowhere in the codec code
+path, so it's a no-op when `video_backend="codec"`. Codec's visual
+input size is controlled entirely by `--codec-target-canvas`, which sets
+`target_canvas` in `cv-preinfer`'s `CodecConfig` — the number of
+*canvases* (grid-packed composite images, each bundling several source
+frames via `group_size`/`images_per_group`) it selects/produces, not a
+raw frame count. Both flags are set to `64` in these runs purely to get
+the two backends' token counts roughly comparable for the "token-matched"
+row above, not because they mean the same thing.
+
 **Summary**: transcode is codec's single biggest overhead — 54% of E2E
-for EgoSchema (6.15s/11.35s), 23% for Video-MME (1.66s/7.20s) — and
+for EgoSchema (6.15s/11.36s), 23% for Video-MME (1.66s/7.21s) — and
 exists *only* because these videos are `mpeg4`, not H264/HEVC (which
 `cv-preinfer` requires); on an H264/HEVC-native corpus it's zero. Even
 with transcode removed, codec is still 1.3–1.65x slower than frames at
