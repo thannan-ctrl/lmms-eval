@@ -281,7 +281,7 @@ _GRID = "#e3e2dd"
 
 
 def plot_breakdown(rows: list[dict], out_png: Path):
-    """Stacked-bar latency breakdown, one bar per (sample, backend)."""
+    """Stacked horizontal-bar latency breakdown, one bar per (sample, backend)."""
     try:
         import matplotlib
         matplotlib.use("Agg")
@@ -290,6 +290,10 @@ def plot_breakdown(rows: list[dict], out_png: Path):
         print(f"[deep-dive] plotting failed: {e}")
         return
 
+    # Reverse so the first row ends up at the top of the chart (barh plots
+    # bottom-to-top in the given order).
+    rows = list(reversed(rows))
+
     fig, ax = plt.subplots(figsize=(7.5, 4.2), facecolor=_SURFACE)
     ax.set_facecolor(_SURFACE)
 
@@ -297,54 +301,52 @@ def plot_breakdown(rows: list[dict], out_png: Path):
     # Group bars by sample with a visible gap between sample groups, a
     # narrower gap between the two backends within a group.
     group_gap, bar_width = 0.6, 0.62
-    x = []
+    y = []
     pos = 0.0
     prev_name = None
     for r in rows:
         if prev_name is not None and r["name"] != prev_name:
             pos += group_gap
-        x.append(pos)
+        y.append(pos)
         pos += 1.0
         prev_name = r["name"]
 
-    # Recessive horizontal gridlines behind the bars.
-    ax.yaxis.grid(True, color=_GRID, linewidth=1, zorder=0)
+    # Recessive vertical gridlines behind the bars.
+    ax.xaxis.grid(True, color=_GRID, linewidth=1, zorder=0)
     ax.set_axisbelow(True)
 
-    bottoms = [0.0] * n
-    bars_by_stage = {}
+    lefts = [0.0] * n
     for stage, color, label in zip(_STAGES, _STAGE_COLORS, _STAGE_LABELS):
         vals = [r[stage] for r in rows]
-        bars = ax.bar(
-            x, vals, bottom=bottoms, width=bar_width, color=color, label=label,
+        ax.barh(
+            y, vals, left=lefts, height=bar_width, color=color, label=label,
             edgecolor=_SURFACE, linewidth=1.5, zorder=2,
         )
-        bars_by_stage[stage] = bars
         # Selective direct labels: only on segments big enough to hold text.
-        for xi, v, b in zip(x, vals, bottoms):
+        for yi, v, left in zip(y, vals, lefts):
             if v >= 0.5:
                 ax.text(
-                    xi, b + v / 2, f"{v:.2f}", ha="center", va="center",
+                    left + v / 2, yi, f"{v:.2f}", ha="center", va="center",
                     fontsize=6.5, color="white", fontweight="normal", zorder=3,
                 )
-        bottoms = [b + v for b, v in zip(bottoms, vals)]
+        lefts = [left + v for left, v in zip(lefts, vals)]
 
-    # Bar-total labels on top.
-    for xi, total in zip(x, bottoms):
+    # Bar-total labels past the end of each bar.
+    for yi, total in zip(y, lefts):
         ax.text(
-            xi, total + max(bottoms) * 0.015, f"{total:.1f}s", ha="center", va="bottom",
+            total + max(lefts) * 0.015, yi, f"{total:.1f}s", ha="left", va="center",
             fontsize=8, color=_TEXT_PRIMARY, fontweight="bold", zorder=3,
         )
 
-    ax.set_xticks(x)
-    ax.set_xticklabels(
-        [f"{r['name']}\n{r['backend']}  ({r['duration_s']:.0f}s)" for r in rows],
+    ax.set_yticks(y)
+    ax.set_yticklabels(
+        [f"{r['name']} {r['backend']}  ({r['duration_s']:.0f}s)" for r in rows],
         fontsize=7.5, color=_TEXT_SECONDARY,
     )
-    ax.set_ylabel("Latency (seconds)", fontsize=8.5, color=_TEXT_SECONDARY)
-    ax.set_ylim(0, max(bottoms) * 1.12)
-    ax.tick_params(axis="y", colors=_TEXT_SECONDARY, labelsize=7.5)
-    ax.tick_params(axis="x", length=0)
+    ax.set_xlabel("Latency (seconds)", fontsize=8.5, color=_TEXT_SECONDARY)
+    ax.set_xlim(0, max(lefts) * 1.14)
+    ax.tick_params(axis="x", colors=_TEXT_SECONDARY, labelsize=7.5)
+    ax.tick_params(axis="y", length=0)
 
     for spine in ("top", "right", "left"):
         ax.spines[spine].set_visible(False)
