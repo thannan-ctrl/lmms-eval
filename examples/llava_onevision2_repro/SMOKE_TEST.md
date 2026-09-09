@@ -25,6 +25,21 @@ into canvases. `512→64 canvases` means it starts by scanning 512 frames
 spread across the video, then boils those down to the 64 "canvas"
 images that actually get sent to the model.
 
+**Where the actual video decoding happens** — it's not one place:
+- `transcode`: `ffmpeg` decodes the original `mpeg4` file and re-encodes
+  it to H264.
+- `cv_preinfer`: reads that H264 file, and decodes the pixels of
+  whichever frames it ends up keeping (to write them out as canvas
+  images). Likely why it needs H264/HEVC specifically — its frame-scoring
+  step probably reads compressed-bitstream stats directly, which only
+  H264/HEVC support.
+- `fetch_video` (frames backend only): `decord` decodes the *original*
+  `mpeg4` file directly — never touches the H264 copy at all.
+
+So the same `mpeg4` video gets decoded twice, independently, by two
+different tools that don't share any work — `ffmpeg` for codec's path,
+`decord` for frames'.
+
 ## Bottom line: codec is a lot slower, mostly one extra step
 
 - **Biggest cost: converting the video format.** Our test videos are an
