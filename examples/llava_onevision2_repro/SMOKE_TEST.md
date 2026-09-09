@@ -7,31 +7,30 @@ environment from the top-level `README.md` § 1. Script:
 
 ## Results (2026-09-09, A100x2)
 
-| Sample | Dur | Backend | Tokens | Predicted | GT | Transcode | Preprocess | VLM | **E2E** | E2E−transcode | vs. frames(32f) |
-|---|--:|---|--:|:-:|:-:|--:|--:|--:|--:|--:|--:|
-| `egoschema/0074f737...` | 180s | frames (32f) | 6144 | D | D ✅ | 0.00s | 0.36s | 2.60s | **2.95s** | 2.95s | 1.00x |
-| `egoschema/0074f737...` | 180s | frames (64f, token-matched) | 12288 | D | D ✅ | 0.00s | 0.59s | 3.78s | **4.37s** | 4.37s | 1.48x |
-| `egoschema/0074f737...` | 180s | codec | 12288 | D | D ✅ | 6.25s | 0.77s | 4.00s | **11.02s** | 4.77s | 3.73x |
-| `videomme/fFjv93ACGo8/001-1` | 74s | frames (32f) | 4608 | A | C ❌ | 0.00s | 0.12s | 1.64s | **1.76s** | 1.76s | 1.00x |
-| `videomme/fFjv93ACGo8/001-1` | 74s | frames (64f, closest match) | 9216 | B | C ❌ | 0.00s | 0.26s | 3.19s | **3.45s** | 3.45s | 1.96x |
-| `videomme/fFjv93ACGo8/001-1` | 74s | codec | 11520 | A | C ❌ | 1.68s | 0.73s | 4.47s | **6.88s** | 5.20s | 3.90x |
+| Sample | Dur | Backend | Tok | Pred/GT | Trns | Pre | VLM | **E2E** | E2E−t | ×frames |
+|---|--:|---|--:|:-:|--:|--:|--:|--:|--:|--:|
+| egoschema | 180s | frames 64f | 12288 | D/D ✅ | 0.0 | 0.6 | 3.8 | **4.4** | 4.4 | 1.0x |
+| egoschema | 180s | codec | 12288 | D/D ✅ | 6.3 | 0.8 | 4.0 | **11.0** | 4.8 | 2.5x |
+| videomme | 74s | frames 64f | 9216 | B/C ❌ | 0.0 | 0.3 | 3.2 | **3.5** | 3.5 | 1.0x |
+| videomme | 74s | codec | 11520 | A/C ❌ | 1.7 | 0.7 | 4.5 | **6.9** | 5.2 | 2.0x |
 
-**Summary**: codec uses ~2x the tokens of the default 32-frame budget; at
-32 frames it's 3.7–3.9x slower end-to-end. Doubling `frames` to 64
-(12288 tokens, an exact match for EgoSchema; 9216 for Video-MME — token
-counts aren't perfectly controllable per-video since resolution varies)
-still leaves codec slower even **after subtracting transcode**
-(E2E−transcode): 4.77s vs. 4.37s for EgoSchema, 5.20s vs. 3.45s for
-Video-MME (codec still has ~25% more tokens there). So the token-budget
-gap explains some but not all of codec's slowdown — canvas
-packing/image-processing (`processor call`) is comparable to frames'
-raw video decode, but codec's VLM pass runs consistently slower even at
-comparable token counts. Transcode itself is a pure artifact of the
-local videos being `mpeg4` not H264/HEVC — an H264/HEVC-native corpus
-skips it entirely. `codec`'s E2E also varied run-to-run (11.3s → 6.9s
-for the same EgoSchema sample across runs), likely OS page-cache/CPU
-contention noise in the `cv-preinfer` subprocess. n=1/cell: illustrative,
-not a throughput benchmark.
+(all times in seconds; E2E−t = E2E minus transcode)
+
+**Summary**: frames run at 64 frames to roughly match codec's token
+budget (12288 tokens, an exact match for EgoSchema; 9216 for Video-MME —
+token counts aren't perfectly controllable per-video since resolution
+varies). Even at comparable token counts and **after subtracting
+transcode** (E2E−transcode), codec is still slower: 4.77s vs. 4.37s for
+EgoSchema, 5.20s vs. 3.45s for Video-MME (codec still has ~25% more
+tokens there). So the token-budget gap explains some but not all of
+codec's slowdown — canvas packing/image-processing (`processor call`)
+is comparable to frames' raw video decode, but codec's VLM pass runs
+consistently slower even at comparable token counts. Transcode itself is
+a pure artifact of the local videos being `mpeg4` not H264/HEVC — an
+H264/HEVC-native corpus skips it entirely. `codec`'s E2E also varied
+run-to-run (11.3s → 6.9s for the same EgoSchema sample across runs),
+likely OS page-cache/CPU contention noise in the `cv-preinfer`
+subprocess. n=1/cell: illustrative, not a throughput benchmark.
 
 <details>
 <summary><b>Reproduce</b> (Docker env, persistent GPU allocation, notes)</summary>
