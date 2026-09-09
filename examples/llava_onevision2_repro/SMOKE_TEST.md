@@ -10,12 +10,12 @@ a separate tool called `cv-preinfer`), in the exact Docker setup from
 
 ## Results (2026-09-09, A100x2)
 
-| Sample | Dur | Backend | Tokens | Transcode | fetch_video | cv_preinfer | image_processor | other | VLM | **E2E** | E2E−transcode | vs. frames | vs. frames, no transcode |
-|---|--:|---|--:|--:|--:|--:|--:|--:|--:|--:|--:|--:|--:|
-| egoschema | 180s | frames | 12288 | 0.00s | 0.22s | – | 0.10s | – | 3.74s | **4.06s** | 4.06s | 1.00x | 1.00x |
-| egoschema | 180s | codec | 12288 | 6.15s | – | 0.49s | 0.06s | 0.59s | 4.06s | **11.36s** | 5.21s | 2.80x | 1.28x |
-| videomme | 74s | frames | 9216 | 0.00s | 0.18s | – | 0.07s | – | 3.11s | **3.36s** | 3.36s | 1.00x | 1.00x |
-| videomme | 74s | codec | 11520 | 1.66s | – | 0.38s | 0.05s | 0.53s | 4.58s | **7.21s** | 5.55s | 2.15x | 1.65x |
+| Sample | Dur | Backend | Frames | Tokens | Transcode | fetch_video | cv_preinfer | image_processor | other | VLM | **E2E** | E2E−transcode | vs. frames | vs. frames, no transcode |
+|---|--:|---|--:|--:|--:|--:|--:|--:|--:|--:|--:|--:|--:|--:|
+| egoschema | 180s | frames | 64 | 12288 | 0.00s | 0.22s | – | 0.10s | – | 3.74s | **4.06s** | 4.06s | 1.00x | 1.00x |
+| egoschema | 180s | codec | 512→64 canvases | 12288 | 6.15s | – | 0.49s | 0.06s | 0.59s | 4.06s | **11.36s** | 5.21s | 2.80x | 1.28x |
+| videomme | 74s | frames | 64 | 9216 | 0.00s | 0.18s | – | 0.07s | – | 3.11s | **3.36s** | 3.36s | 1.00x | 1.00x |
+| videomme | 74s | codec | 512→64 canvases | 11520 | 1.66s | – | 0.38s | 0.05s | 0.53s | 4.58s | **7.21s** | 5.55s | 2.15x | 1.65x |
 
 ![latency breakdown](latency_breakdown.png)
 
