@@ -19,9 +19,37 @@ import argparse
 import json
 import re
 import string
+import subprocess
+import time
 from pathlib import Path
 
 import torch
+
+
+def transcode_to_h264(src_path: str, out_dir: Path) -> tuple[str, float]:
+    """cv-preinfer (the codec backend's canvas packer) only accepts
+    H264/HEVC bitstreams. EgoSchema/Video-MME videos here are mpeg4, so
+    transcode a copy first. Returns (output_path, transcode_latency_s).
+    """
+    out_dir.mkdir(parents=True, exist_ok=True)
+    out_path = out_dir / (Path(src_path).stem + "_h264.mp4")
+    if not out_path.exists():
+        t0 = time.time()
+        subprocess.run(
+            [
+                "ffmpeg", "-y", "-i", src_path,
+                "-c:v", "libx264", "-preset", "fast", "-crf", "23",
+                "-c:a", "copy",
+                str(out_path),
+            ],
+            check=True,
+            capture_output=True,
+            text=True,
+        )
+        latency = time.time() - t0
+    else:
+        latency = 0.0  # already transcoded (cached across backend loop / reruns)
+    return str(out_path), latency
 
 
 def build_mcq_prompt(question: str, options: list[str]) -> str:
@@ -83,32 +111,54 @@ def load_videomme_sample(data_root: Path):
     raise RuntimeError("No video_mme questions.json entry has a matching local video file")
 
 
-def run_one(model, sample: dict, task_hint: str) -> dict:
+def run_one(model, sample: dict, task_hint: str, video_path: str | None = None, transcode_latency_s: float = 0.0) -> dict:
+    """Run one sample through `model` (video_backend is whatever the caller
+    already set on the model instance) and time the stages that matter for
+    a backend comparison: transcode (codec only, 0 for frames), video
+    preprocessing (frame extraction for "frames", canvas packing /
+    cv-preinfer for "codec"), and the VLM forward pass (model.generate).
+    """
     from lmms_eval.protocol import ChatMessages
 
+    video_path = video_path or sample["video_path"]
     prompt = build_mcq_prompt(sample["question"], sample["options"])
     raw_messages = [
         {
             "role": "user",
             "content": [
-                {"type": "video", "url": sample["video_path"]},
+                {"type": "video", "url": video_path},
                 {"type": "text", "text": prompt},
             ],
         }
     ]
     cm = ChatMessages(**{"messages": raw_messages})
-    hf_messages, pil_images, _video_urls, _sub_dicts = model._build_messages(cm, task=task_hint)
+
+    t_pre_start = time.time()
+    hf_messages, pil_images, video_urls, sub_dicts = model._build_messages(cm, task=task_hint)
 
     text = model.processor.apply_chat_template(
         [hf_messages], tokenize=False, add_generation_prompt=True
     )
-    inputs = model.processor(
-        text=text,
-        images=pil_images if pil_images else None,
-        videos=None,
-        return_tensors="pt",
-        padding=True,
-    )
+    if model.video_backend == "codec":
+        # Heavy lifting (cv-preinfer canvas packing) happens here for the
+        # codec backend; for "frames" it already happened inside
+        # _build_messages (per-frame extraction via qwen_vl_utils).
+        # `text` is already a list[str] (batch of 1) from apply_chat_template
+        # above -- don't wrap it again.
+        inputs = model._codec_call_processor(
+            texts=text, flat_videos=video_urls, subtitle_dicts=sub_dicts
+        )
+    else:
+        inputs = model.processor(
+            text=text,
+            images=pil_images if pil_images else None,
+            videos=None,
+            return_tensors="pt",
+            padding=True,
+        )
+    torch.cuda.synchronize()
+    t_pre_end = time.time()
+
     inputs = {k: (v.to(model._device) if isinstance(v, torch.Tensor) else v) for k, v in inputs.items()}
     gen_args = dict(inputs)
     gen_args.pop("mm_token_type_ids", None)
@@ -120,14 +170,30 @@ def run_one(model, sample: dict, task_hint: str) -> dict:
         do_sample=False,
         use_cache=True,
     )
+    t_vlm_start = time.time()
     with torch.inference_mode():
         out = model.model.generate(**gen_args)
+    torch.cuda.synchronize()
+    t_vlm_end = time.time()
+
     out = out[:, inputs["input_ids"].shape[-1] :]
     response = model.tokenizer.batch_decode(out, skip_special_tokens=True)[0].strip()
 
     m = re.search(r"Answer:\s*([A-Z])", response)
     pred = m.group(1) if m else None
-    return {"prompt": prompt, "response": response, "pred": pred, **sample}
+    preprocess_latency_s = t_pre_end - t_pre_start
+    vlm_latency_s = t_vlm_end - t_vlm_start
+    return {
+        "prompt": prompt,
+        "response": response,
+        "pred": pred,
+        "backend": model.video_backend,
+        "transcode_latency_s": transcode_latency_s,
+        "preprocess_latency_s": preprocess_latency_s,
+        "vlm_latency_s": vlm_latency_s,
+        "e2e_latency_s": transcode_latency_s + preprocess_latency_s + vlm_latency_s,
+        **sample,
+    }
 
 
 def main():
@@ -140,9 +206,26 @@ def main():
     ap.add_argument("--min-pixels", type=int, default=100352)
     ap.add_argument("--max-pixels", type=int, default=313600)
     ap.add_argument("--fps", type=float, default=1.0)
+    ap.add_argument(
+        "--backends",
+        default="frames,codec",
+        help="comma-separated: frames, codec, or frames,codec (default) to compare both",
+    )
+    ap.add_argument(
+        "--codec-target-canvas",
+        type=int,
+        default=64,
+        help="codec_target_canvas / max_num_frames for the codec backend (README default range: 64-128)",
+    )
+    ap.add_argument(
+        "--transcode-dir",
+        default="/tmp/h264_transcoded",
+        help="where to write H264 transcodes for the codec backend (cv-preinfer requires H264/HEVC input)",
+    )
     args = ap.parse_args()
 
     data_root = Path(args.data_root)
+    backends = [b.strip() for b in args.backends.split(",") if b.strip()]
 
     from lmms_eval.models.chat.llava_onevision2 import Llava_OneVision2
 
@@ -156,7 +239,8 @@ def main():
         max_num_frames=args.num_frames,
         fps=args.fps,
         messages_format="timestamp",
-        video_backend="frames",
+        video_backend=backends[0],
+        codec_target_canvas=args.codec_target_canvas,
     )
 
     samples = {
@@ -164,13 +248,66 @@ def main():
         "videomme": load_videomme_sample(data_root),
     }
 
+    transcode_dir = Path(args.transcode_dir)
+
+    all_results = []
     for task_hint, sample in samples.items():
-        print(f"\n=== {sample['name']} ===")
-        print(f"video: {sample['video_path']}")
-        print(f"question: {sample['question']}")
-        result = run_one(model, sample, task_hint)
-        print(f"--- model response ---\n{result['response']}")
-        print(f"predicted: {result['pred']}  ground_truth: {result['gt']}")
+        for backend in backends:
+            # Mutate the already-loaded model instead of reinstantiating,
+            # so the 8B weights are loaded exactly once.
+            model.video_backend = backend
+            if backend == "codec":
+                model.codec_config = {"target_canvas": args.codec_target_canvas}
+                video_path, transcode_latency_s = transcode_to_h264(
+                    sample["video_path"], transcode_dir
+                )
+                print(
+                    f"\n[transcode] {sample['video_path']} -> {video_path} "
+                    f"({transcode_latency_s:.2f}s)"
+                )
+            else:
+                video_path, transcode_latency_s = sample["video_path"], 0.0
+
+            print(f"\n=== {sample['name']} [{backend}] ===")
+            print(f"video: {video_path}")
+            print(f"question: {sample['question']}")
+            result = run_one(
+                model, sample, task_hint,
+                video_path=video_path, transcode_latency_s=transcode_latency_s,
+            )
+            print(f"--- model response ---\n{result['response']}")
+            print(f"predicted: {result['pred']}  ground_truth: {result['gt']}")
+            print(
+                f"transcode_latency={result['transcode_latency_s']:.2f}s  "
+                f"preprocess_latency={result['preprocess_latency_s']:.2f}s  "
+                f"vlm_latency={result['vlm_latency_s']:.2f}s  "
+                f"e2e_latency={result['e2e_latency_s']:.2f}s"
+            )
+            all_results.append(result)
+
+    if len(backends) > 1:
+        print("\n=== latency comparison (frames = baseline) ===")
+        header = (
+            f"{'sample':<40}{'backend':<10}{'transcode_s':>12}"
+            f"{'preprocess_s':>14}{'vlm_s':>10}{'e2e_s':>10}{'e2e_vs_frames':>16}"
+        )
+        print(header)
+        by_sample: dict[str, dict[str, dict]] = {}
+        for r in all_results:
+            by_sample.setdefault(r["name"], {})[r["backend"]] = r
+        for name, per_backend in by_sample.items():
+            baseline_e2e = per_backend.get("frames", {}).get("e2e_latency_s")
+            for backend, r in per_backend.items():
+                delta = (
+                    f"{r['e2e_latency_s'] / baseline_e2e:.2f}x"
+                    if baseline_e2e
+                    else "-"
+                )
+                print(
+                    f"{name:<40}{backend:<10}{r['transcode_latency_s']:>12.2f}"
+                    f"{r['preprocess_latency_s']:>14.2f}"
+                    f"{r['vlm_latency_s']:>10.2f}{r['e2e_latency_s']:>10.2f}{delta:>16}"
+                )
 
 
 if __name__ == "__main__":
