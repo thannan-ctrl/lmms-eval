@@ -26,7 +26,7 @@ matched token budgets — VLM runs consistently slower per comparable
 token, while canvas packing is comparable to frames' video decode.
 n=1/cell: illustrative, not a throughput benchmark.
 
-**Note**: EgoSchema's transcode takes 3.72x longer than Video-MME's
+**Transcode scales with pixels, not duration**: EgoSchema's transcode takes 3.72x longer than Video-MME's
 (6.25s vs. 1.68s) despite the video being only 2.42x longer (180s vs.
 74.3s) — because it's also taller (448×336 vs. 448×252), and CPU-bound
 `ffmpeg` encodes every pixel. Total pixels (frames × area) works out to
