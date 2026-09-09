@@ -10,43 +10,37 @@ environment from the top-level `README.md` § 1. Script:
 Videos: EgoSchema `0074f737-11cb-497d-8d07-77c3a8127391` (180s) and
 Video-MME `fFjv93ACGo8` question `001-1` (74s).
 
-| Sample | Dur | Backend | Tokens | Transcode | Preprocess | VLM | **E2E** | E2E−transcode | vs. frames(64f) | vs. frames(64f), no transcode |
-|---|--:|---|--:|--:|--:|--:|--:|--:|--:|--:|
-| egoschema | 180s | frames (64f, token-matched) | 12288 | 0.00s | 0.59s | 3.78s | **4.37s** | 4.37s | 1.00x | 1.00x |
-| egoschema | 180s | codec | 12288 | 6.25s | 0.77s | 4.00s | **11.02s** | 4.77s | 2.52x | 1.09x |
-| videomme | 74s | frames (64f, closest match) | 9216 | 0.00s | 0.26s | 3.19s | **3.45s** | 3.45s | 1.00x | 1.00x |
-| videomme | 74s | codec | 11520 | 1.68s | 0.73s | 4.47s | **6.88s** | 5.20s | 1.99x | 1.51x |
+Frames split into `fetch_video` (decord decode+resize) vs.
+`image_processor` (PIL frames → tensors); codec split into `transcode`
+(mpeg4→H264, see below) vs. `cv_preinfer` (the CLI subprocess) vs. its
+own `image_processor` (canvas JPEGs → tensors) vs. `other` (padding
+drop + position calc + tokenize, not split further):
 
-**Summary**: transcode is codec's single biggest overhead — 57% of E2E
-for EgoSchema (6.25s/11.02s), 24% for Video-MME (1.68s/6.88s) — and
-exists *only* because these videos are `mpeg4`, not H264/HEVC (which
-`cv-preinfer` requires); on an H264/HEVC-native corpus it's zero. Even
-with transcode removed, codec is still 1.1–1.5x slower than frames at
-matched token budgets — VLM runs consistently slower per comparable
-token, while canvas packing is comparable to frames' video decode.
-n=1/cell: illustrative, not a throughput benchmark.
-
-**Transcode scales with pixels, not duration**: EgoSchema's transcode takes 3.72x longer than Video-MME's
-(6.25s vs. 1.68s) despite the video being only 2.42x longer (180s vs.
-74.3s) — because it's also taller (448×336 vs. 448×252), and CPU-bound
-`ffmpeg` encodes every pixel. Total pixels (frames × area) works out to
-3.23x, much closer to the observed gap than duration alone.
-
-**Full stage breakdown (`run_latency_deep_dive.py`, one extra level
-below the table above)** — frames split into `fetch_video` (decord
-decode+resize) vs. `image_processor` (PIL frames → tensors); codec split
-into `cv_preinfer` (the CLI subprocess) vs. its own `image_processor`
-(canvas JPEGs → tensors) vs. `other` (padding drop + position calc +
-tokenize, not split further):
-
-| Sample | Backend | Transcode | fetch_video | cv_preinfer | image_processor | other | VLM | Total |
-|---|---|--:|--:|--:|--:|--:|--:|--:|
-| egoschema (180s) | frames | 0.00s | 0.22s | – | 0.10s | – | 3.74s | 4.06s |
-| egoschema (180s) | codec | 6.15s | – | 0.49s | 0.06s | 0.59s | 4.06s | 11.36s |
-| videomme (74s) | frames | 0.00s | 0.18s | – | 0.07s | – | 3.11s | 3.36s |
-| videomme (74s) | codec | 1.66s | – | 0.38s | 0.05s | 0.53s | 4.58s | 7.21s |
+| Sample | Dur | Backend | Tokens | Transcode | fetch_video | cv_preinfer | image_processor | other | VLM | **E2E** | E2E−transcode | vs. frames(64f) | vs. frames(64f), no transcode |
+|---|--:|---|--:|--:|--:|--:|--:|--:|--:|--:|--:|--:|--:|
+| egoschema | 180s | frames (64f, token-matched) | 12288 | 0.00s | 0.22s | – | 0.10s | – | 3.74s | **4.06s** | 4.06s | 1.00x | 1.00x |
+| egoschema | 180s | codec | 12288 | 6.15s | – | 0.49s | 0.06s | 0.59s | 4.06s | **11.36s** | 5.21s | 2.80x | 1.28x |
+| videomme | 74s | frames (64f, closest match) | 9216 | 0.00s | 0.18s | – | 0.07s | – | 3.11s | **3.36s** | 3.36s | 1.00x | 1.00x |
+| videomme | 74s | codec | 11520 | 1.66s | – | 0.38s | 0.05s | 0.53s | 4.58s | **7.21s** | 5.55s | 2.15x | 1.65x |
 
 ![latency breakdown](latency_breakdown.png)
+
+**Summary**: transcode is codec's single biggest overhead — 54% of E2E
+for EgoSchema (6.15s/11.35s), 23% for Video-MME (1.66s/7.20s) — and
+exists *only* because these videos are `mpeg4`, not H264/HEVC (which
+`cv-preinfer` requires); on an H264/HEVC-native corpus it's zero. Even
+with transcode removed, codec is still 1.3–1.65x slower than frames at
+roughly matched token budgets — VLM runs consistently slower per
+comparable token, while canvas packing (`image_processor`) is actually
+cheaper than frames' own. n=1/cell: illustrative, not a throughput
+benchmark.
+
+**Transcode scales with pixels, not duration**: EgoSchema's transcode
+takes 3.7x longer than Video-MME's (6.15s vs. 1.66s) despite the video
+being only 2.42x longer (180s vs. 74.3s) — because it's also taller
+(448×336 vs. 448×252), and CPU-bound `ffmpeg` encodes every pixel. Total
+pixels (frames × area) works out to 3.23x, much closer to the observed
+gap than duration alone.
 
 Three things fall out of this:
 - **`fetch_video` (decord decode) is cheap and barely duration-dependent**
@@ -70,6 +64,21 @@ remaining stage explains the rest — `cv_preinfer` and `other` are both
 mid-sized and both duration-independent, and codec's VLM pass itself
 also runs consistently slower than frames' even at similar token counts
 (see the token-matched comparison above).
+
+**Which stages track the raw video vs. the frame/canvas count:**
+- *Scales with source video (duration × resolution)*: `transcode` only,
+  confirmed above. (`cv_preinfer` looked flat here too, but a separate,
+  larger run across many more EgoSchema videos shows it actually varies
+  substantially across videos — these two just happened to be similar;
+  not written up in this doc yet.)
+- *Scales with `--num-frames`/`--codec-target-canvas` (both fixed at 64
+  here), not duration*: `fetch_video` (decord seeks straight to the 64
+  sampled indices, doesn't decode the whole file), both `image_processor`
+  steps (fixed frame/canvas count × a roughly fixed per-frame pixel
+  budget via `smart_resize`), codec's `other` bucket (padding/position
+  ops sized to the canvas count), and `vlm` (driven by `num_video_tokens`,
+  itself a function of frame/canvas count and their resized dimensions,
+  not raw duration).
 
 <details>
 <summary><b>Reproduce</b> (Docker env, persistent GPU allocation, notes)</summary>

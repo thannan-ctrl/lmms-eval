@@ -290,7 +290,7 @@ def plot_breakdown(rows: list[dict], out_png: Path):
         print(f"[deep-dive] plotting failed: {e}")
         return
 
-    fig, ax = plt.subplots(figsize=(9, 5.5), facecolor=_SURFACE)
+    fig, ax = plt.subplots(figsize=(7.5, 4.2), facecolor=_SURFACE)
     ax.set_facecolor(_SURFACE)
 
     n = len(rows)
@@ -322,10 +322,10 @@ def plot_breakdown(rows: list[dict], out_png: Path):
         bars_by_stage[stage] = bars
         # Selective direct labels: only on segments big enough to hold text.
         for xi, v, b in zip(x, vals, bottoms):
-            if v >= 0.35:
+            if v >= 0.5:
                 ax.text(
                     xi, b + v / 2, f"{v:.2f}", ha="center", va="center",
-                    fontsize=8, color="white", fontweight="normal", zorder=3,
+                    fontsize=6.5, color="white", fontweight="normal", zorder=3,
                 )
         bottoms = [b + v for b, v in zip(bottoms, vals)]
 
@@ -333,17 +333,17 @@ def plot_breakdown(rows: list[dict], out_png: Path):
     for xi, total in zip(x, bottoms):
         ax.text(
             xi, total + max(bottoms) * 0.015, f"{total:.1f}s", ha="center", va="bottom",
-            fontsize=9.5, color=_TEXT_PRIMARY, fontweight="bold", zorder=3,
+            fontsize=8, color=_TEXT_PRIMARY, fontweight="bold", zorder=3,
         )
 
     ax.set_xticks(x)
     ax.set_xticklabels(
         [f"{r['name']}\n{r['backend']}  ({r['duration_s']:.0f}s)" for r in rows],
-        fontsize=9.5, color=_TEXT_SECONDARY,
+        fontsize=7.5, color=_TEXT_SECONDARY,
     )
-    ax.set_ylabel("Latency (seconds)", fontsize=10.5, color=_TEXT_SECONDARY)
+    ax.set_ylabel("Latency (seconds)", fontsize=8.5, color=_TEXT_SECONDARY)
     ax.set_ylim(0, max(bottoms) * 1.12)
-    ax.tick_params(axis="y", colors=_TEXT_SECONDARY, labelsize=9)
+    ax.tick_params(axis="y", colors=_TEXT_SECONDARY, labelsize=7.5)
     ax.tick_params(axis="x", length=0)
 
     for spine in ("top", "right", "left"):
@@ -352,18 +352,18 @@ def plot_breakdown(rows: list[dict], out_png: Path):
 
     fig.suptitle(
         "llava_onevision2: frames vs. codec latency breakdown",
-        x=0.01, y=0.98, ha="left", fontsize=13.5, color=_TEXT_PRIMARY, fontweight="bold",
+        x=0.01, y=0.98, ha="left", fontsize=10.5, color=_TEXT_PRIMARY, fontweight="bold",
     )
     fig.text(
-        0.01, 0.925, "EgoSchema (180s) and Video-MME (74s), 64 frames / 64 canvases",
-        fontsize=9.5, color=_TEXT_SECONDARY,
+        0.01, 0.915, "EgoSchema (180s) and Video-MME (74s), 64 frames / 64 canvases",
+        fontsize=7.5, color=_TEXT_SECONDARY,
     )
 
     legend = ax.legend(
-        loc="upper left", bbox_to_anchor=(1.01, 1.0), fontsize=9,
-        frameon=False, labelcolor=_TEXT_SECONDARY, handlelength=1.2, handleheight=1.2,
+        loc="upper left", bbox_to_anchor=(1.01, 1.0), fontsize=7,
+        frameon=False, labelcolor=_TEXT_SECONDARY, handlelength=1.0, handleheight=1.0,
     )
-    fig.tight_layout(rect=(0, 0, 0.86, 0.88))
+    fig.tight_layout(rect=(0, 0, 0.84, 0.87))
     fig.savefig(out_png, dpi=170, facecolor=_SURFACE)
     plt.close(fig)
     print(f"\n[deep-dive] wrote {out_png}")
