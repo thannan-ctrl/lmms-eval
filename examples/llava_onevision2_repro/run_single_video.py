@@ -332,7 +332,7 @@ def main():
         print("\n=== latency comparison (frames = baseline) ===")
         header = (
             f"{'sample':<40}{'backend':<10}{'dur_s':>8}{'tokens':>8}{'transcode_s':>12}"
-            f"{'preprocess_s':>14}{'vlm_s':>10}{'e2e_s':>10}{'e2e_vs_frames':>16}"
+            f"{'preprocess_s':>14}{'vlm_s':>10}{'e2e_s':>10}{'e2e-transcode_s':>16}{'e2e_vs_frames':>16}"
         )
         print(header)
         by_sample: dict[str, dict[str, dict]] = {}
@@ -346,11 +346,13 @@ def main():
                     if baseline_e2e
                     else "-"
                 )
+                e2e_minus_transcode = r["e2e_latency_s"] - r["transcode_latency_s"]
                 print(
                     f"{name:<40}{backend:<10}{r['duration_s']:>8.1f}"
                     f"{r['num_video_tokens']:>8}{r['transcode_latency_s']:>12.2f}"
                     f"{r['preprocess_latency_s']:>14.2f}"
-                    f"{r['vlm_latency_s']:>10.2f}{r['e2e_latency_s']:>10.2f}{delta:>16}"
+                    f"{r['vlm_latency_s']:>10.2f}{r['e2e_latency_s']:>10.2f}"
+                    f"{e2e_minus_transcode:>16.2f}{delta:>16}"
                 )
 
 
