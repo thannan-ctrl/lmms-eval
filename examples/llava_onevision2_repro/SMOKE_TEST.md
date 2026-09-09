@@ -32,6 +32,22 @@ n=1/cell: illustrative, not a throughput benchmark.
 `ffmpeg` encodes every pixel. Total pixels (frames × area) works out to
 3.23x, much closer to the observed gap than duration alone.
 
+**Codec preprocess has a fixed cost that doesn't shrink with video
+length**: the codec-vs-frames preprocess gap is *relatively* bigger on
+the shorter Video-MME clip (0.73s vs. 0.26s, +0.47s) than the longer
+EgoSchema one (0.77s vs. 0.59s, +0.18s). Frames' preprocess is
+in-process (`decord` decodes/resizes directly, no subprocess); codec's
+shells out to the `cv-preinfer` CLI, which does bitcost/readiness
+scoring, writes canvases to disk as JPEGs, then reads them back for
+image processing — a subprocess-launch + disk round-trip tax that's
+roughly fixed regardless of video length. On the longer video that tax
+is a small share of the total and preprocess lands close to frames'; on
+the shorter one it's a much bigger share, so codec's preprocess barely
+drops even though the video is less than half as long. Not independently
+measured (subprocess time vs. image-processing time within the call
+wasn't split out) — a plausible read of the shape of the data, not a
+confirmed breakdown.
+
 <details>
 <summary><b>Reproduce</b> (Docker env, persistent GPU allocation, notes)</summary>
 
