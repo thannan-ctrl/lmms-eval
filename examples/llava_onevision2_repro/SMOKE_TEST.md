@@ -32,13 +32,16 @@ n=1/cell: illustrative, not a throughput benchmark.
 `ffmpeg` encodes every pixel. Total pixels (frames × area) works out to
 3.23x, much closer to the observed gap than duration alone.
 
-**Codec preprocess has a fixed cost**: the codec-vs-frames preprocess
-gap is relatively bigger on the shorter Video-MME clip (0.73s vs. 0.26s)
-than EgoSchema (0.77s vs. 0.59s). Frames' preprocess is in-process
-(`decord`); codec's shells out to `cv-preinfer` (bitcost scoring + JPEG
-canvas write/read) — a roughly fixed subprocess/disk tax that's a small
-share of the total on the longer video but dominates on the shorter one.
-Not independently timed — plausible, not confirmed.
+**Why codec's preprocess doesn't shrink much on the shorter clip: not
+known.** The codec-vs-frames preprocess gap is relatively bigger on
+Video-MME (0.73s vs. 0.26s) than EgoSchema (0.77s vs. 0.59s), i.e.
+codec's preprocess barely drops even though the video is less than half
+as long. `run_single_video.py` only times the whole `_codec_call_processor`
+call as one block, not the `cv-preinfer` subprocess and the canvas
+image-processing step separately, so there's no measurement to point to
+a cause (e.g. subprocess-launch/disk-I/O overhead vs. something in
+`cv-preinfer`'s own scoring). Would need splitting that call's timing
+further to say anything concrete.
 
 <details>
 <summary><b>Reproduce</b> (Docker env, persistent GPU allocation, notes)</summary>
