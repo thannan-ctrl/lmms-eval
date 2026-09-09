@@ -10,12 +10,12 @@ environment from the top-level `README.md` § 1. Script:
 Videos: EgoSchema `0074f737-11cb-497d-8d07-77c3a8127391` (180s) and
 Video-MME `fFjv93ACGo8` question `001-1` (74s).
 
-| Sample | Dur | Backend | Tokens | Predicted | GT | Transcode | Preprocess | VLM | **E2E** | E2E−transcode | vs. frames(64f) |
-|---|--:|---|--:|:-:|:-:|--:|--:|--:|--:|--:|--:|
-| egoschema | 180s | frames (64f, token-matched) | 12288 | D | D ✅ | 0.00s | 0.59s | 3.78s | **4.37s** | 4.37s | 1.00x |
-| egoschema | 180s | codec | 12288 | D | D ✅ | 6.25s | 0.77s | 4.00s | **11.02s** | 4.77s | 2.52x |
-| videomme | 74s | frames (64f, closest match) | 9216 | B | C ❌ | 0.00s | 0.26s | 3.19s | **3.45s** | 3.45s | 1.00x |
-| videomme | 74s | codec | 11520 | A | C ❌ | 1.68s | 0.73s | 4.47s | **6.88s** | 5.20s | 1.99x |
+| Sample | Dur | Backend | Tokens | Transcode | Preprocess | VLM | **E2E** | E2E−transcode | vs. frames(64f) | vs. frames(64f), no transcode |
+|---|--:|---|--:|--:|--:|--:|--:|--:|--:|--:|
+| egoschema | 180s | frames (64f, token-matched) | 12288 | 0.00s | 0.59s | 3.78s | **4.37s** | 4.37s | 1.00x | 1.00x |
+| egoschema | 180s | codec | 12288 | 6.25s | 0.77s | 4.00s | **11.02s** | 4.77s | 2.52x | 1.09x |
+| videomme | 74s | frames (64f, closest match) | 9216 | 0.00s | 0.26s | 3.19s | **3.45s** | 3.45s | 1.00x | 1.00x |
+| videomme | 74s | codec | 11520 | 1.68s | 0.73s | 4.47s | **6.88s** | 5.20s | 1.99x | 1.51x |
 
 **Summary**: frames run at 64 frames to roughly match codec's token
 budget (12288 tokens, an exact match for EgoSchema; 9216 for Video-MME —
