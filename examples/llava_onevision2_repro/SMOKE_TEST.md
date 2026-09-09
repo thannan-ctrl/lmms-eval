@@ -39,9 +39,11 @@ drop + position calc + tokenize, not split further):
 - **`cv_preinfer` looks duration-independent here but isn't in general**
   (varies a lot across a larger EgoSchema sample, not shown here). It
   samples a fixed `512`-frame candidate pool
-  (`(target_canvas//images_per_group)*group_size`) regardless of video
-  length — but decoding those 512 timestamps still costs more on a
-  longer/higher-res video.
+  (`(target_canvas//images_per_group)*group_size`), clamped down only
+  for videos shorter than 512 frames (~17s @30fps) — neither test video
+  hit that clamp. So the *target count* is length-independent, but
+  decoding those 512 timestamps still costs more on a longer/higher-res
+  video.
 - **`--num-frames` is a no-op for codec** — codec's size comes entirely
   from `--codec-target-canvas` (a canvas count, not a frame count); both
   set to `64` here just to roughly match token counts.
