@@ -25,84 +25,26 @@ drop + position calc + tokenize, not split further):
 
 ![latency breakdown](latency_breakdown.png)
 
-**`--num-frames` vs. `--codec-target-canvas`**: `--num-frames` (`max_num_frames`)
-only feeds into the `frames` backend's frame sampling
-(`_process_video_with_timestamp`); it's read nowhere in the codec code
-path, so it's a no-op when `video_backend="codec"`. Codec's visual
-input size is controlled entirely by `--codec-target-canvas`, which sets
-`target_canvas` in `cv-preinfer`'s `CodecConfig` — the number of
-*canvases* (grid-packed composite images, each bundling several source
-frames via `group_size`/`images_per_group`) it selects/produces, not a
-raw frame count. Both flags are set to `64` in these runs purely to get
-the two backends' token counts roughly comparable for the "token-matched"
-row above, not because they mean the same thing.
-
-**Summary**: transcode is codec's single biggest overhead — 54% of E2E
-for EgoSchema (6.15s/11.36s), 23% for Video-MME (1.66s/7.21s) — and
-exists *only* because these videos are `mpeg4`, not H264/HEVC (which
-`cv-preinfer` requires); on an H264/HEVC-native corpus it's zero. Even
-with transcode removed, codec is still 1.3–1.65x slower than frames at
-roughly matched token budgets — VLM runs consistently slower per
-comparable token, while canvas packing (`image_processor`) is actually
-cheaper than frames' own. n=1/cell: illustrative, not a throughput
-benchmark.
-
-**Transcode scales with pixels, not duration**: EgoSchema's transcode
-takes 3.7x longer than Video-MME's (6.15s vs. 1.66s) despite the video
-being only 2.42x longer (180s vs. 74.3s) — because it's also taller
-(448×336 vs. 448×252), and CPU-bound `ffmpeg` encodes every pixel. Total
-pixels (frames × area) works out to 3.23x, much closer to the observed
-gap than duration alone.
-
-Three things fall out of this:
-- **`fetch_video` (decord decode) is cheap and barely duration-dependent**
-  (0.22s @180s vs. 0.18s @74s) — decord seeks directly to the 64 sampled
-  frame indices rather than decoding the whole video, so raw decode was
-  never actually the bottleneck for `frames`.
-- **Codec's own `image_processor` (canvas → tensors) is tiny** (0.05–0.06s),
-  even cheaper than frames' equivalent step — canvas packing itself
-  isn't the problem either.
-- **The real non-transcode, non-VLM bottleneck is codec's `other` bucket**
-  (0.53–0.59s, comparable in size to `cv_preinfer`), and it's just as
-  flat across the 2.4x duration difference as everything else in the
-  codec path. This bundles `drop_padding_canvases` + position computation
-  + tokenizing the rewritten (timestamp-injected) prompt — not split
-  further here, so which of those three actually dominates is still
-  open.
-
-Bottom line: **transcode dominates codec's overhead by far** (6.15s/1.66s,
-larger than every other codec-side stage combined); past that, no single
-remaining stage explains the rest — `cv_preinfer` and `other` are both
-mid-sized and both duration-independent, and codec's VLM pass itself
-also runs consistently slower than frames' even at similar token counts
-(see the token-matched comparison above).
-
-**Which stages track the raw video vs. the frame/canvas count:**
-- *Scales with source video (duration × resolution)*: `transcode`,
-  confirmed above. `cv_preinfer` looked flat here too, but a separate,
-  larger run across many more EgoSchema videos shows it actually varies
-  substantially — these two just happened to be similar; not written up
-  in this doc yet. The mechanism is now confirmed, not just a hunch: per
-  the checkpoint's bundled `CodecConfig`,
-  `num_sampled_frames() = (target_canvas // images_per_group) * group_size`
-  — with the defaults used here (`group_size=32`, `images_per_group=4`,
-  `target_canvas=64`) that's `(64//4)*32 = 512`, a **fixed** candidate-frame
-  count set purely by config, clamped down only if the video has fewer
-  than 512 total frames (neither of these two does — EgoSchema has 5400,
-  Video-MME has 2227). So the *target count* doesn't depend on video
-  length. But `cv-preinfer` still has to uniformly seek to and decode 512
-  timestamps spread across the video's actual duration, and that seek/decode
-  *cost* does scale with length and resolution (further apart in a longer
-  video, more data per seek in a higher-resolution one) — the sampling
-  target is length-independent, the cost of hitting it isn't.
-- *Scales with `--num-frames`/`--codec-target-canvas` (both fixed at 64
-  here), not duration*: `fetch_video` (decord seeks straight to the 64
-  sampled indices, doesn't decode the whole file), both `image_processor`
-  steps (fixed frame/canvas count × a roughly fixed per-frame pixel
-  budget via `smart_resize`), codec's `other` bucket (padding/position
-  ops sized to the canvas count), and `vlm` (driven by `num_video_tokens`,
-  itself a function of frame/canvas count and their resized dimensions,
-  not raw duration).
+**Key findings** (n=1/cell, illustrative not a benchmark):
+- **Transcode dominates codec's overhead** (54%/23% of E2E). Artifact of
+  local `mpeg4` videos, not H264/HEVC (`cv-preinfer`'s requirement) —
+  zero on a native-H264/HEVC corpus. Scales with total pixels, not
+  duration (2.4x longer video → 3.7x slower transcode, since also taller).
+- **Codec is still 1.3–1.65x slower even without transcode**, at matched
+  token budgets — VLM itself runs slower per token, though codec's own
+  `image_processor` is cheaper than frames'.
+- **`fetch_video` + both `image_processor`s scale with frame/canvas
+  count, not duration** — fixed at 64 here, and decord seeks straight to
+  sampled indices rather than decoding the whole file.
+- **`cv_preinfer` looks duration-independent here but isn't in general**
+  (varies a lot across a larger EgoSchema sample, not shown here). It
+  samples a fixed `512`-frame candidate pool
+  (`(target_canvas//images_per_group)*group_size`) regardless of video
+  length — but decoding those 512 timestamps still costs more on a
+  longer/higher-res video.
+- **`--num-frames` is a no-op for codec** — codec's size comes entirely
+  from `--codec-target-canvas` (a canvas count, not a frame count); both
+  set to `64` here just to roughly match token counts.
 
 <details>
 <summary><b>Reproduce</b> (Docker env, persistent GPU allocation, notes)</summary>
