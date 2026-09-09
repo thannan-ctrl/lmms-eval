@@ -360,10 +360,11 @@ def plot_breakdown(rows: list[dict], out_png: Path):
     )
 
     legend = ax.legend(
-        loc="upper left", bbox_to_anchor=(1.01, 1.0), fontsize=7,
+        loc="upper center", bbox_to_anchor=(0.5, -0.14), ncol=3, fontsize=7,
         frameon=False, labelcolor=_TEXT_SECONDARY, handlelength=1.0, handleheight=1.0,
+        columnspacing=1.2,
     )
-    fig.tight_layout(rect=(0, 0, 0.84, 0.87))
+    fig.tight_layout(rect=(0, 0.06, 1.0, 0.87))
     fig.savefig(out_png, dpi=170, facecolor=_SURFACE)
     plt.close(fig)
     print(f"\n[deep-dive] wrote {out_png}")
