@@ -7,14 +7,12 @@ environment from the top-level `README.md` § 1. Script:
 
 ## Results (2026-09-09, A100x2)
 
-| Sample | Dur | Backend | Tok | Pred/GT | Trns | Pre | VLM | **E2E** | E2E−t | ×frames |
-|---|--:|---|--:|:-:|--:|--:|--:|--:|--:|--:|
-| egoschema | 180s | frames 64f | 12288 | D/D ✅ | 0.0 | 0.6 | 3.8 | **4.4** | 4.4 | 1.0x |
-| egoschema | 180s | codec | 12288 | D/D ✅ | 6.3 | 0.8 | 4.0 | **11.0** | 4.8 | 2.5x |
-| videomme | 74s | frames 64f | 9216 | B/C ❌ | 0.0 | 0.3 | 3.2 | **3.5** | 3.5 | 1.0x |
-| videomme | 74s | codec | 11520 | A/C ❌ | 1.7 | 0.7 | 4.5 | **6.9** | 5.2 | 2.0x |
-
-(all times in seconds; E2E−t = E2E minus transcode)
+| Sample | Dur | Backend | Tokens | Predicted | GT | Transcode | Preprocess | VLM | **E2E** | E2E−transcode | vs. frames(64f) |
+|---|--:|---|--:|:-:|:-:|--:|--:|--:|--:|--:|--:|
+| `egoschema/0074f737...` | 180s | frames (64f, token-matched) | 12288 | D | D ✅ | 0.00s | 0.59s | 3.78s | **4.37s** | 4.37s | 1.00x |
+| `egoschema/0074f737...` | 180s | codec | 12288 | D | D ✅ | 6.25s | 0.77s | 4.00s | **11.02s** | 4.77s | 2.52x |
+| `videomme/fFjv93ACGo8/001-1` | 74s | frames (64f, closest match) | 9216 | B | C ❌ | 0.00s | 0.26s | 3.19s | **3.45s** | 3.45s | 1.00x |
+| `videomme/fFjv93ACGo8/001-1` | 74s | codec | 11520 | A | C ❌ | 1.68s | 0.73s | 4.47s | **6.88s** | 5.20s | 1.99x |
 
 **Summary**: frames run at 64 frames to roughly match codec's token
 budget (12288 tokens, an exact match for EgoSchema; 9216 for Video-MME —
