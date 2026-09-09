@@ -263,34 +263,110 @@ def main():
             f"{r['other_s']:>8.2f}{r['vlm_s']:>8.2f}{total:>8.2f}"
         )
 
-    # Visualization: stacked bar per (sample, backend).
+    out_png = Path(args.out_png) if args.out_png else data_root / "latency_breakdown.png"
+    plot_breakdown(rows, out_png)
+
+
+# Stage order is fixed and semantic (pipeline order), so hues are assigned in
+# a fixed sequence rather than cycled -- slots 1-6 of the validated default
+# categorical palette (dataviz skill, references/palette.md), which passes
+# every adjacent-pair CVD/contrast gate for stacked-bar use.
+_STAGES = ["transcode_s", "fetch_video_s", "cv_preinfer_s", "image_processor_s", "other_s", "vlm_s"]
+_STAGE_LABELS = ["transcode", "fetch_video (decode)", "cv_preinfer", "image processor", "other", "vlm"]
+_STAGE_COLORS = ["#2a78d6", "#eb6834", "#1baf7a", "#eda100", "#e87ba4", "#008300"]
+_SURFACE = "#fcfcfb"
+_TEXT_PRIMARY = "#0b0b0b"
+_TEXT_SECONDARY = "#52514e"
+_GRID = "#e3e2dd"
+
+
+def plot_breakdown(rows: list[dict], out_png: Path):
+    """Stacked-bar latency breakdown, one bar per (sample, backend)."""
     try:
         import matplotlib
         matplotlib.use("Agg")
         import matplotlib.pyplot as plt
-
-        stages = ["transcode_s", "fetch_video_s", "cv_preinfer_s", "image_processor_s", "other_s", "vlm_s"]
-        colors = ["#999999", "#4C72B0", "#DD8452", "#55A868", "#C44E52", "#8172B2"]
-        labels = ["transcode", "fetch_video (decode)", "cv_preinfer", "image_processor", "other", "vlm"]
-
-        fig, ax = plt.subplots(figsize=(8, 5))
-        x = list(range(len(rows)))
-        bottoms = [0.0] * len(rows)
-        for stage, color, label in zip(stages, colors, labels):
-            vals = [r[stage] for r in rows]
-            ax.bar(x, vals, bottom=bottoms, color=color, label=label)
-            bottoms = [b + v for b, v in zip(bottoms, vals)]
-        ax.set_xticks(x)
-        ax.set_xticklabels([f"{r['name']}\n{r['backend']}\n({r['duration_s']:.0f}s)" for r in rows])
-        ax.set_ylabel("seconds")
-        ax.set_title("llava_onevision2 latency breakdown: frames vs. codec")
-        ax.legend(loc="upper left", bbox_to_anchor=(1.0, 1.0), fontsize=8)
-        fig.tight_layout()
-        out_png = Path(args.out_png) if args.out_png else data_root / "latency_breakdown.png"
-        fig.savefig(out_png, dpi=150)
-        print(f"\n[deep-dive] wrote {out_png}")
     except Exception as e:  # noqa: BLE001
         print(f"[deep-dive] plotting failed: {e}")
+        return
+
+    fig, ax = plt.subplots(figsize=(9, 5.5), facecolor=_SURFACE)
+    ax.set_facecolor(_SURFACE)
+
+    n = len(rows)
+    # Group bars by sample with a visible gap between sample groups, a
+    # narrower gap between the two backends within a group.
+    group_gap, bar_width = 0.6, 0.62
+    x = []
+    pos = 0.0
+    prev_name = None
+    for r in rows:
+        if prev_name is not None and r["name"] != prev_name:
+            pos += group_gap
+        x.append(pos)
+        pos += 1.0
+        prev_name = r["name"]
+
+    # Recessive horizontal gridlines behind the bars.
+    ax.yaxis.grid(True, color=_GRID, linewidth=1, zorder=0)
+    ax.set_axisbelow(True)
+
+    bottoms = [0.0] * n
+    bars_by_stage = {}
+    for stage, color, label in zip(_STAGES, _STAGE_COLORS, _STAGE_LABELS):
+        vals = [r[stage] for r in rows]
+        bars = ax.bar(
+            x, vals, bottom=bottoms, width=bar_width, color=color, label=label,
+            edgecolor=_SURFACE, linewidth=1.5, zorder=2,
+        )
+        bars_by_stage[stage] = bars
+        # Selective direct labels: only on segments big enough to hold text.
+        for xi, v, b in zip(x, vals, bottoms):
+            if v >= 0.35:
+                ax.text(
+                    xi, b + v / 2, f"{v:.2f}", ha="center", va="center",
+                    fontsize=8, color="white", fontweight="normal", zorder=3,
+                )
+        bottoms = [b + v for b, v in zip(bottoms, vals)]
+
+    # Bar-total labels on top.
+    for xi, total in zip(x, bottoms):
+        ax.text(
+            xi, total + max(bottoms) * 0.015, f"{total:.1f}s", ha="center", va="bottom",
+            fontsize=9.5, color=_TEXT_PRIMARY, fontweight="bold", zorder=3,
+        )
+
+    ax.set_xticks(x)
+    ax.set_xticklabels(
+        [f"{r['name']}\n{r['backend']}  ({r['duration_s']:.0f}s)" for r in rows],
+        fontsize=9.5, color=_TEXT_SECONDARY,
+    )
+    ax.set_ylabel("Latency (seconds)", fontsize=10.5, color=_TEXT_SECONDARY)
+    ax.set_ylim(0, max(bottoms) * 1.12)
+    ax.tick_params(axis="y", colors=_TEXT_SECONDARY, labelsize=9)
+    ax.tick_params(axis="x", length=0)
+
+    for spine in ("top", "right", "left"):
+        ax.spines[spine].set_visible(False)
+    ax.spines["bottom"].set_color(_GRID)
+
+    fig.suptitle(
+        "llava_onevision2: frames vs. codec latency breakdown",
+        x=0.01, y=0.98, ha="left", fontsize=13.5, color=_TEXT_PRIMARY, fontweight="bold",
+    )
+    fig.text(
+        0.01, 0.925, "EgoSchema (180s) and Video-MME (74s), 64 frames / 64 canvases",
+        fontsize=9.5, color=_TEXT_SECONDARY,
+    )
+
+    legend = ax.legend(
+        loc="upper left", bbox_to_anchor=(1.01, 1.0), fontsize=9,
+        frameon=False, labelcolor=_TEXT_SECONDARY, handlelength=1.2, handleheight=1.2,
+    )
+    fig.tight_layout(rect=(0, 0, 0.86, 0.88))
+    fig.savefig(out_png, dpi=170, facecolor=_SURFACE)
+    plt.close(fig)
+    print(f"\n[deep-dive] wrote {out_png}")
 
 
 if __name__ == "__main__":
