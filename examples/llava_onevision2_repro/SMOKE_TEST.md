@@ -76,9 +76,11 @@ stage — codec's path never touches what `decord` does, and vice versa.
 Same frames-vs-codec comparison, but run on every EgoSchema subset video
 (500) and every locally-available Video-MME question (1395), with
 accuracy this time. Script: `run_dataset_eval.py`, resumable via a JSONL
-checkpoint (see Reproduce below). **EgoSchema is done; Video-MME is
-~85% through as of this snapshot — numbers below will keep shifting
-until it finishes.**
+checkpoint (see Reproduce below). Codec uses the same sampling method
+(`uniform_count`) and config (unscaled, identical for every video) as
+the single-video test above. **EgoSchema is done; Video-MME is ~85%
+through as of this snapshot — numbers below will keep shifting until it
+finishes.**
 
 | Dataset | Backend | n | Acc | E2E | Transcode | cv_preinfer | VLM |
 |---|---|--:|--:|--:|--:|--:|--:|
