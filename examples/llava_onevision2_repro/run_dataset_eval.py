@@ -30,6 +30,7 @@ from run_single_video import (  # noqa: E402
     instrument_codec_image_processor,
     instrument_cv_preinfer,
     instrument_fine_grained,
+    instrument_vit,
     run_one,
     transcode_to_h264,
 )
@@ -108,9 +109,9 @@ def append_checkpoint(path: Path, record: dict):
 def print_aggregate(done: dict):
     print("\n=== aggregate results ===")
     header = (
-        f"{'dataset':<10}{'backend':<8}{'n':>5}{'acc':>8}{'transcode_s':>12}"
+        f"{'dataset':<10}{'backend':<8}{'n':>5}{'acc':>8}{'tokens':>8}{'transcode_s':>12}"
         f"{'fetch_video_s':>14}{'cv_preinfer_s':>14}{'image_proc_s':>13}{'other_s':>9}"
-        f"{'vlm_s':>8}{'e2e_s':>8}"
+        f"{'vit_s':>7}{'llm_s':>7}{'e2e_s':>8}"
     )
     print(header)
     by_key: dict[tuple, list] = {}
@@ -128,10 +129,11 @@ def print_aggregate(done: dict):
             return sum(vals) / len(vals) if vals else 0.0
 
         print(
-            f"{dataset:<10}{backend:<8}{n:>5}{acc * 100:>7.1f}%{avg('transcode_latency_s'):>12.2f}"
+            f"{dataset:<10}{backend:<8}{n:>5}{acc * 100:>7.1f}%{avg('num_video_tokens'):>8.0f}"
+            f"{avg('transcode_latency_s'):>12.2f}"
             f"{avg('fetch_video_latency_s'):>14.2f}{avg('cv_preinfer_latency_s'):>14.2f}"
             f"{avg('image_processor_latency_s'):>13.2f}{avg('other_latency_s'):>9.2f}"
-            f"{avg('vlm_latency_s'):>8.2f}{avg('e2e_latency_s'):>8.2f}"
+            f"{avg('vit_latency_s'):>7.2f}{avg('llm_latency_s'):>7.2f}{avg('e2e_latency_s'):>8.2f}"
         )
 
 
@@ -196,6 +198,8 @@ def main():
     )
     patched = instrument_codec_image_processor(args.model)
     print(f"[dataset-eval] codec_image_processor instrumented: {patched}")
+    vit_patched = instrument_vit(model.model)
+    print(f"[dataset-eval] vit instrumented: {vit_patched}")
 
     n_done_this_run = 0
     t_start = time.time()

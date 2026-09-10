@@ -94,6 +94,21 @@ def instrument_codec_image_processor(pretrained: str) -> bool:
     return False
 
 
+def instrument_vit(model) -> bool:
+    """Times the vision tower's forward pass (`model.model.visual`)
+    separately from the rest of `model.generate()`, via
+    `_fine_timing['vit']`. Called once per generate() -- vision features
+    are computed during the prefill step, not per decode step -- so this
+    isolates ViT cost from LLM (autoregressive decode) cost within the
+    single combined `vlm_latency_s` we otherwise measure.
+    """
+    visual = getattr(getattr(model, "model", None), "visual", None)
+    if visual is None:
+        return False
+    visual.forward = _timed_fn("vit", visual.forward)
+    return True
+
+
 def video_duration_seconds(video_path: str) -> float:
     cap = cv2.VideoCapture(video_path)
     try:
@@ -270,11 +285,13 @@ def run_one(model, sample: dict, task_hint: str, video_path: str | None = None, 
         do_sample=False,
         use_cache=True,
     )
+    _fine_timing.pop("vit", None)
     t_vlm_start = time.time()
     with torch.inference_mode():
         out = model.model.generate(**gen_args)
     torch.cuda.synchronize()
     t_vlm_end = time.time()
+    vit_latency_s = _fine_timing.pop("vit", None)
 
     # Number of vision tokens actually consumed by the LLM: total patches
     # (sum of t*h*w over image_grid_thw rows) divided by spatial_merge_size^2
@@ -293,6 +310,9 @@ def run_one(model, sample: dict, task_hint: str, video_path: str | None = None, 
     pred = m.group(1) if m else None
     preprocess_latency_s = t_pre_end - t_pre_start
     vlm_latency_s = t_vlm_end - t_vlm_start
+    # ViT: vision-tower forward pass (prefill only, timed via instrument_vit).
+    # LLM: the rest of generate() -- autoregressive decode.
+    llm_latency_s = vlm_latency_s - vit_latency_s if vit_latency_s is not None else None
     # Split codec's processor_latency_s into the cv-preinfer subprocess call
     # vs. everything after it (canvas image-processing + position/tokenize).
     canvas_postproc_latency_s = (
@@ -339,6 +359,8 @@ def run_one(model, sample: dict, task_hint: str, video_path: str | None = None, 
         "other_latency_s": other_latency_s,
         "preprocess_latency_s": preprocess_latency_s,
         "vlm_latency_s": vlm_latency_s,
+        "vit_latency_s": vit_latency_s,
+        "llm_latency_s": llm_latency_s,
         "e2e_latency_s": transcode_latency_s + preprocess_latency_s + vlm_latency_s,
         "num_video_tokens": num_video_tokens,
         **sample,
@@ -395,6 +417,7 @@ def main():
         codec_target_canvas=args.codec_target_canvas,
     )
     instrument_codec_image_processor(args.model)
+    instrument_vit(model.model)
 
     samples = {
         "egoschema": load_egoschema_sample(data_root),
@@ -436,13 +459,18 @@ def main():
                 if result["cv_preinfer_latency_s"] is not None
                 else ""
             )
+            vlm_breakdown = (
+                f" [vit={result['vit_latency_s']:.2f}s llm={result['llm_latency_s']:.2f}s]"
+                if result.get("vit_latency_s") is not None
+                else ""
+            )
             print(
                 f"transcode={result['transcode_latency_s']:.2f}s  "
                 f"build_messages={result['build_messages_latency_s']:.2f}s  "
                 f"chat_template={result['chat_template_latency_s']:.3f}s  "
                 f"processor={result['processor_latency_s']:.2f}s{processor_breakdown}  "
                 f"(preprocess_total={result['preprocess_latency_s']:.2f}s)  "
-                f"vlm={result['vlm_latency_s']:.2f}s  "
+                f"vlm={result['vlm_latency_s']:.2f}s{vlm_breakdown}  "
                 f"e2e={result['e2e_latency_s']:.2f}s  "
                 f"num_video_tokens={result['num_video_tokens']}"
             )
