@@ -3,7 +3,7 @@
 `llava_onevision2` feeds video two ways: **`frames`** (sample 64 evenly)
 or **`codec`** (a separate tool, `cv-preinfer`, picks the 64 "best"
 frames from H264 encoding signals). Ran both on EgoSchema (500 videos)
-and Video-MME (1395 questions), Docker setup from `README.md`, `A100x2`.
+and Video-MME (1395 questions), Docker setup from `README.md`, 1 A100.
 
 ## TL;DR
 
@@ -103,7 +103,7 @@ binaries:
   and **no source distribution exists anywhere**. Genuine dead end.
 
 Codec has no viable public path on GB200; frames might, with effort.
-All numbers above are from `A100x2` (x86_64).
+All numbers above are from a single A100 (x86_64).
 
 <details>
 <summary><b>Reproduce</b></summary>
@@ -140,8 +140,10 @@ srun --jobid=$JOBID bash -c '
 '
 ```
 
-Non-obvious flags: `A100x2` not `gb200nvl72_preprod` (aarch64 lacks
-`decord`/`cv-preinfer`); `--user $(id -u):$(id -g) -e HOME=/tmp` (NFS
+Non-obvious flags: `--partition=A100x2` not `gb200nvl72_preprod`
+(aarch64 lacks `decord`/`cv-preinfer`; `--gres=gpu:1` still only
+requests 1 GPU — `A100x2` is just the partition's name);
+`--user $(id -u):$(id -g) -e HOME=/tmp` (NFS
 root-squash blocks root writing the mount); `-e
 LLAVA_CODEC_ONLINE_TUNED=1` (routes to the pinned
 `codec-video-prep-legacy-exact` CLI instead of the README-forbidden
