@@ -1,159 +1,144 @@
-# Single-video smoke test: frames vs. codec
+# Frames vs. codec: does `llava_onevision2` run, and is codec worth it?
 
-Quick check: does `llava_onevision2` actually run end-to-end, and how
-much slower is the "codec" way of feeding it video vs. the plain
-"frames" way? Ran on one EgoSchema video (3 min) and one Video-MME video
-(74s), each two ways — `frames` (sample 64 frames, feed them straight
-in) and `codec` (score candidate frames by codec bit-cost/motion signal
-and keep the best 64 as individual "canvas" images, via a separate tool
-called `cv-preinfer`), in the exact Docker setup from `README.md`.
+`llava_onevision2` can feed video to the model two ways: **`frames`**
+(sample 64 frames evenly, feed them straight in) or **`codec`** (use a
+separate tool, `cv-preinfer`, to pick the 64 "best" frames using signals
+already sitting in the video's H264 encoding, instead of sampling
+blindly). Ran both, on EgoSchema (500 videos) and Video-MME (1395
+questions), in the exact Docker setup from `README.md` on `A100x2`.
 
-## Results (2026-09-09, A100x2)
+## TL;DR
 
-| Sample | Dur | Backend | Frames | Tokens | Transcode | fetch_video | cv_preinfer | image_processor | other | VLM | **E2E** | E2E−transcode | vs. frames | vs. frames, no transcode |
-|---|--:|---|--:|--:|--:|--:|--:|--:|--:|--:|--:|--:|--:|--:|
-| egoschema | 180s | frames | 64 | 12288 | 0.00s | 0.22s | – | 0.10s | – | 3.74s | **4.06s** | 4.06s | 1.00x | 1.00x |
-| egoschema | 180s | codec | 512→64 canvases | 12288 | 6.15s | – | 0.49s | 0.06s | 0.59s | 4.06s | **11.36s** | 5.21s | 2.80x | 1.28x |
-| videomme | 74s | frames | 64 | 9216 | 0.00s | 0.18s | – | 0.07s | – | 3.11s | **3.36s** | 3.36s | 1.00x | 1.00x |
-| videomme | 74s | codec | 512→64 canvases | 11520 | 1.66s | – | 0.38s | 0.05s | 0.53s | 4.58s | **7.21s** | 5.55s | 2.15x | 1.65x |
+**Codec is 6-7x slower end-to-end for basically no accuracy gain.**
 
-![latency breakdown](latency_breakdown.png)
+| Dataset | Backend | n | Accuracy | **E2E latency/sample** |
+|---|---|--:|--:|--:|
+| EgoSchema | frames | 500 | 69.4% | **3.81s** |
+| EgoSchema | codec | 500 | 69.6% | **22.46s** |
+| Video-MME | frames | 1395 | 62.2% | **3.26s** |
+| Video-MME | codec | 1395 | 63.2% | **22.47s** |
 
-### What "512→64 canvases" actually means
+Accuracy moves by ~0.2-1.0 points either way (noise-level for this n) —
+codec buys almost nothing here. Full latency breakdown:
+
+| Dataset | Backend | Tokens | Transcode | cv_preinfer | image_proc | other | **E2E** |
+|---|---|--:|--:|--:|--:|--:|--:|
+| egoschema | frames | 11760 | 0.00s | – | 0.09s | 0.02s | **3.81s** |
+| egoschema | codec | 11925 | 6.26s | 11.05s | 0.06s | 0.54s | **22.46s** |
+| videomme | frames | 8998 | 0.00s | – | 0.08s | 0.02s | **3.26s** |
+| videomme | codec | 9955 | 7.53s | 10.32s | 0.05s | 0.55s | **22.47s** |
+
+Two things drive nearly all of the gap:
+1. **Transcode** — `cv-preinfer` only accepts H264/HEVC; our source
+   videos are old-format `mpeg4`, so every codec run pays for an `ffmpeg`
+   conversion first (skipped entirely if your video is already
+   H264/HEVC).
+2. **`cv_preinfer` itself** (the frame-selection step below) — this is
+   the real cost, averaging 10-11s/video, way more than transcoding.
+
+(ViT/LLM only got instrumented partway through this run, so it's just a
+53-sample partial for Video-MME, not reliable at full scale: codec
+`vit=0.03s llm=4.25s`, frames `vit=0.02s llm=3.42s`.)
+
+## What "512→64 canvases" actually means
 
 ![how codec picks its canvases](codec_canvas_concept.png)
 
-`cv_preinfer` is a separate, pip-installed tool (`codec-video-prep-legacy-exact`)
-that codec shells out to for video prep — this repo just calls it and
-hands it a video, it doesn't pick frames itself. In one call it:
+`cv-preinfer` (package `codec-video-prep-legacy-exact`) is a separate
+tool this repo shells out to — it does the picking, not the model. One
+call does:
 
-1. Uniformly samples **512 candidate frames** from the video.
-2. Scores each one for "readiness" using **bit-cost and motion-vector
+1. Uniformly sample **512 candidate frames** from the video.
+2. Score each one for "readiness" using **bit-cost and motion-vector
    data read straight from the H264 bitstream** — no full pixel decode
-   needed for scoring, which is why it only accepts H264/HEVC input.
-3. Keeps the best-scoring **64 frames** (4 out of every 32-frame group)
-   and fully decodes just those — each kept frame becomes its own canvas
-   image, one frame per canvas, confirmed by `drop_padding_canvases`
-   treating every canvas as having one uniform timestamp across all its
-   patches (not a multi-frame packed collage, despite "canvas packing"
-   sounding like one).
+   needed to score a frame, which is also why the tool needs H264/HEVC
+   input specifically.
+3. Keep the best-scoring **64 frames** (4 out of every 32-frame group)
+   and fully decode just those. Each kept frame becomes its own canvas
+   image — one frame per canvas, not a multi-frame collage (confirmed by
+   how the checkpoint code stamps one uniform timestamp per canvas).
 
-**This is *not* the LLaVA-OneVision-2 companion paper's method** — it
-just reuses the same general idea (a codec's own compression decisions
+**This is *not* the LLaVA-OneVision-2 companion paper's method.** It
+reuses the same general idea — a codec's own compression decisions
 already mark where a video's information-dense content is, so reuse
-that instead of a separate analysis pass). Checked directly against the
-paper ([*OneVision-Encoder: Codec-Aligned
-Sparsity*](https://arxiv.org/abs/2602.08683)) and its official code
+that instead of a separate analysis pass — but a different mechanism
+entirely. Checked directly against the paper ([*OneVision-Encoder:
+Codec-Aligned Sparsity*](https://arxiv.org/abs/2602.08683)) and its
+official code
 ([github.com/EvolvingLMMs-Lab/OneVision-Encoder](https://github.com/EvolvingLMMs-Lab/OneVision-Encoder)):
-the paper sparsifies **patches within frames** (keeps every patch on
-I-frames, prunes P-frame patches to a fixed 2,048-token budget per
-64-frame clip — no frame is ever dropped as a whole unit) using
-**HEVC**; `cv-preinfer` drops **whole frames** (keeps 64 of 512, full
-patch grid on survivors) using **H264**, and shares no code or
-terminology with either the paper or its repo (`readiness`, `bitcost`,
-`canvas`, `group_size` appear in neither).
+the paper sparsifies **patches within frames** (every I-frame patch
+kept, P-frame patches pruned to a fixed budget — no frame ever dropped
+as a whole unit) using **HEVC**. `cv-preinfer` drops **whole frames**
+(keeps 64 of 512, full patch grid on survivors) using **H264**, and
+shares no code or terminology with the paper or its repo (`readiness`,
+`bitcost`, `canvas`, `group_size` appear in neither).
 
-Two separate video decodes happen in this pipeline, in two different
-tools that share no work: `ffmpeg` decodes the original `mpeg4` and
-re-encodes it to H264 (the `transcode` stage), while `decord` decodes
-the *original* `mpeg4` directly for the `frames` backend's `fetch_video`
-stage — codec's path never touches what `decord` does, and vice versa.
+Also: two separate, unrelated decodes happen across the two backends.
+`ffmpeg` decodes the original `mpeg4` and re-encodes to H264 for
+codec's `transcode` step, while `decord` separately decodes the
+*original* `mpeg4` for frames' `fetch_video` step — neither backend's
+decode touches the other's.
 
-## Bottom line: codec is a lot slower, mostly one extra step
-
-- **Biggest cost: converting the video format.** Our test videos are an
-  old format (`mpeg4`); `cv-preinfer` only accepts newer ones
-  (H264/HEVC), so we convert first — that alone eats 23-54% of codec's
-  total time. Videos already in H264/HEVC skip this entirely.
-- **Even without that conversion, codec is still 30-65% slower** at a
-  similar amount of info fed to the model — the model itself just takes
-  longer per token when its input comes from codec.
-- **Bigger/longer videos take longer to convert**, and not just
-  proportionally to length — ffmpeg touches every pixel, so a video
-  2.4x longer but also a bit taller costs 3.7x more to convert.
-- **Sampling frames barely depends on video length** — grabbing 64
-  frames takes about the same time from a 74s video or a 3-minute one,
-  since we jump straight to those frames instead of decoding everything.
-- **codec secretly scans way more of the video than "64" suggests.**
-  Under the hood it first looks at 512 candidate frames spread across
-  the video before packing anything into the 64 canvases. That 512
-  doesn't shrink with video length (unless the video's under ~17s) —
-  but *fetching* those 512 frames still takes longer on a longer video.
-- **`--num-frames` does nothing for codec** — it only controls the
-  plain-frames path. Codec's size is set by a different flag,
+**Other quirks worth knowing:**
+- `cv_preinfer`'s cost is **not duration-independent** — a single cherry-picked
+  video made it look flat (~0.5s), but across the real datasets it
+  averages 20-25x higher (10-11s), varying a lot sample to sample.
+- The "512 candidates" figure barely shrinks with video length (only
+  drops below ~17s videos) — so scanning candidates gets slower on
+  longer videos even though the final canvas count stays 64.
+- `--num-frames` does nothing for codec — that flag only controls the
+  `frames` path. Codec's canvas count is set separately, via
   `--codec-target-canvas`.
 
-(n=1 per cell — illustrative, not a real benchmark.)
+(Single-video numbers below are illustrative, n=1 per cell — the table
+above, from the full 500/1395-sample run, is the real comparison.)
 
-## Whole-dataset eval (complete, 2026-09-10)
+<details>
+<summary>Single-video micro-benchmark (2 videos, for sanity-checking the mechanism above)</summary>
 
-Same frames-vs-codec comparison, but run on every EgoSchema subset video
-(500) and every locally-available Video-MME question (1395), with
-accuracy this time. Script: `run_dataset_eval.py`, resumable via a JSONL
-checkpoint (see Reproduce below). Codec uses the same sampling method
-(`uniform_count`) and config (unscaled, identical for every video) as
-the single-video test above. **All 3790 (dataset, sample, backend)
-units finished.**
+| Sample | Dur | Backend | Frames | Tokens | Transcode | fetch_video | cv_preinfer | image_processor | other | VLM | **E2E** |
+|---|--:|---|--:|--:|--:|--:|--:|--:|--:|--:|--:|
+| egoschema | 180s | frames | 64 | 12288 | 0.00s | 0.22s | – | 0.10s | – | 3.74s | **4.06s** |
+| egoschema | 180s | codec | 512→64 canvases | 12288 | 6.15s | – | 0.49s | 0.06s | 0.59s | 4.06s | **11.36s** |
+| videomme | 74s | frames | 64 | 9216 | 0.00s | 0.18s | – | 0.07s | – | 3.11s | **3.36s** |
+| videomme | 74s | codec | 512→64 canvases | 11520 | 1.66s | – | 0.38s | 0.05s | 0.53s | 4.58s | **7.21s** |
 
-| Dataset | Backend | n | Acc | Tokens | Transcode | cv_preinfer | image_processor | other | **E2E** |
-|---|---|--:|--:|--:|--:|--:|--:|--:|--:|
-| egoschema | frames | 500 | 69.4% | 11760 | 0.00s | – | 0.09s | 0.02s | **3.81s** |
-| egoschema | codec | 500 | 69.6% | 11925 | 6.26s | 11.05s | 0.06s | 0.54s | **22.46s** |
-| videomme | frames | 1395 | 62.2% | 8998 | 0.00s | – | 0.08s | 0.02s | **3.26s** |
-| videomme | codec | 1395 | 63.2% | 9955 | 7.53s | 10.32s | 0.05s | 0.55s | **22.47s** |
+![latency breakdown](latency_breakdown.png)
 
-At real scale, accuracy is a near-tie on both datasets (69.4/69.6% on
-EgoSchema, 62.2/63.2% on Video-MME) — codec's ~5.9x/6.9x extra E2E
-latency buys almost nothing here, on either dataset. `cv_preinfer` also
-confirms what the single-video test couldn't: it's *not*
-duration-independent in general — its average across the real datasets
-(11.05s EgoSchema, 10.32s Video-MME) is 20-25x the 0.49s measured on the
-one cherry-picked video.
+Bigger/longer videos cost more to transcode, and not just
+proportionally — ffmpeg touches every pixel, so a video 2.4x longer but
+also a bit taller cost 3.7x more here.
 
-ViT/LLM split: only instrumented partway through this run (added mid-way,
-see commit history), so it's only available for the ~53 Video-MME
-samples computed after that point, not the full 1395 or any of EgoSchema
-— not a reliable full-dataset number. On that partial sample: codec
-`vit=0.03s, llm=4.25s`; frames `vit=0.02s, llm=3.42s`.
+</details>
 
 ## Why this can't run on GB200 (aarch64)
 
-Not a model or GPU-support restriction — the model card publishes no
-GPU compatibility list, and `transformers`/`torch`/CUDA all run fine on
-GB200. The blocker is entirely in two auxiliary tools this pipeline
-depends on, both of which only ship precompiled native binaries for
-x86_64:
+Not a model/GPU-support restriction — no GPU compatibility list is
+published, and `transformers`/`torch`/CUDA all run fine on GB200. The
+blocker is two auxiliary tools that only ship precompiled x86_64
+binaries:
 
-- **`decord`** (frames backend, via `qwen_vl_utils.fetch_video`): no
-  Linux aarch64 wheels on PyPI. `eva-decord` (a common substitute)
-  doesn't cover Linux aarch64 either — only macOS and Linux x86_64/Windows.
-  Unlike the tool below, **decord's source is public**
-  ([github.com/dmlc/decord](https://github.com/dmlc/decord)) — a
-  from-source aarch64 build is plausible in principle (not attempted
-  here), which would only fix the `frames`/dense side.
-- **`codec-video-prep-legacy-exact`** (codec backend's `cv-preinfer`
-  tool): resolves to a `py3-none-any` "fat" wheel on aarch64 that bundles
-  precompiled native libraries for select platforms, loaded dynamically
-  at runtime — but doesn't include a working aarch64 build inside it.
-  Installs cleanly, then fails at runtime with
-  `RuntimeError: cv_reader.read_video_cb not available`. **No sdist is
-  published for this package anywhere** — this one is a genuine dead
-  end without access to its non-public source.
+- **`decord`** (frames backend): no Linux aarch64 wheels on PyPI (or
+  from the common substitute `eva-decord`). Its source **is** public
+  ([github.com/dmlc/decord](https://github.com/dmlc/decord)), so a
+  from-source aarch64 build is plausible in principle — not attempted
+  here.
+- **`codec-video-prep-legacy-exact`** (codec backend's `cv-preinfer`):
+  installs fine on aarch64 but fails at runtime with `RuntimeError:
+  cv_reader.read_video_cb not available` — its aarch64 wheel is a
+  fallback that's missing the native backend, and **no source
+  distribution is published anywhere** for this package. Genuine dead
+  end without non-public source access.
 
-So **codec is blocked on GB200 with no viable path from public
-packages alone** — decord could plausibly be source-built for `frames`,
-but `codec-video-prep-legacy-exact` cannot. All whole-dataset numbers
-above are from `A100x2` (x86_64) — see the [single-video
-results](#results-2026-09-09-a100x2) above for what fails and why on
-`gb200nvl72_preprod` specifically.
+So codec has no viable public path on GB200 today; frames might, with
+effort. All numbers above are from `A100x2` (x86_64).
 
 <details>
-<summary><b>Reproduce</b> (Docker env, persistent GPU allocation, notes)</summary>
+<summary><b>Reproduce</b></summary>
 
 Data: `<DATA_ROOT>/egoschema/subset.json` + `.../video_mme/questions.json`
-matched against local video files. Default `DATA_ROOT`:
-`/home/thannan/scratch/AutoGaze/data`. Prompt: MCQ + brief reasoning
-before `Answer: X`, parsed vs. ground truth.
+matched against local video files (default `DATA_ROOT`:
+`/home/thannan/scratch/AutoGaze/data`).
 
 ```bash
 salloc --partition=A100x2 --nodes=1 --gres=gpu:1 --time=08:00:00 sleep 28800 &
@@ -177,28 +162,25 @@ srun --jobid=$JOBID bash -c '
             --index-url https://test.pypi.org/simple/ \
             --extra-index-url https://pypi.org/simple/ \
             codec-video-prep-legacy-exact==0.2.5.post2
-        python3 examples/llava_onevision2_repro/run_single_video.py \
-            --data-root /data --num-frames 64 \
-            --backends frames,codec --codec-target-canvas 64
+        python3 examples/llava_onevision2_repro/run_dataset_eval.py \
+            --data-root /data --backends frames,codec
       "
 '
 ```
 
-**Notes** (all cluster/data-specific, not README bugs):
-- `A100x2`, not `gb200nvl72_preprod`: that partition is `aarch64` and
-  `decord` has no aarch64 wheels. `A100x2` matches the README's
-  "verified on 8 × A100-80GB" and has `/home/scratch.thannan_wwfo`
-  mounted (confirm with `ls` — not all partitions/nodes do).
+Key non-obvious flags:
+- `A100x2`, not `gb200nvl72_preprod`: aarch64 partitions lack a working
+  `decord`/`cv-preinfer` (see above).
 - `--user $(id -u):$(id -g) -e HOME=/tmp`: NFS root-squash blocks
   `docker run`'s default root user from writing the mounted repo/cache.
-- `-e LLAVA_CODEC_ONLINE_TUNED=1`: the checkpoint's default codec path
-  calls a `cv-preinfer` binary only the README-forbidden regular
-  `codec-video-prep` package provides; this repo's "online tuned" path
-  correctly calls the pinned `codec-video-prep-legacy-exact` CLI, opt-in
-  via this env var.
-- Transcode: `cv-preinfer` only accepts H264/HEVC; local videos are
-  `mpeg4`, so the scripts transcode a throwaway H264 copy
-  (`ffmpeg -c:v libx264 -preset fast -crf 23`) per video, timed
-  separately as `transcode_latency_s`.
+- `-e LLAVA_CODEC_ONLINE_TUNED=1`: routes to the pinned
+  `codec-video-prep-legacy-exact` CLI (the checkpoint's default path
+  otherwise expects the README-forbidden `codec-video-prep` package).
+
+`run_dataset_eval.py` checkpoints to a JSONL file
+(`(dataset, sample_id, backend)` keyed) and resumes automatically —
+safe to re-run after a SLURM timeout. Single-video variant:
+`run_single_video.py --data-root /data --num-frames 64 --backends
+frames,codec --codec-target-canvas 64`.
 
 </details>
