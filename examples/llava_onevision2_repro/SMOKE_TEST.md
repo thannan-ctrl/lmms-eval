@@ -97,6 +97,32 @@ climbing as more (and longer/heavier) videos were sampled (0.49s on the
 one cherry-picked video → 11.05s average over all 500 EgoSchema videos,
 10.02s over 1365 Video-MME videos).
 
+## Why this can't run on GB200 (aarch64)
+
+Not a model or GPU-support restriction — the model card publishes no
+GPU compatibility list, and `transformers`/`torch`/CUDA all run fine on
+GB200. The blocker is entirely in two auxiliary tools this pipeline
+depends on, both of which only ship precompiled native binaries for
+x86_64 (no aarch64 build, no publicly available source to build one):
+
+- **`decord`** (frames backend, via `qwen_vl_utils.fetch_video`): no
+  Linux aarch64 wheels on PyPI. `eva-decord` (a common substitute)
+  doesn't cover Linux aarch64 either — only macOS and Linux x86_64/Windows.
+- **`codec-video-prep-legacy-exact`** (codec backend's `cv-preinfer`
+  tool): resolves to a `py3-none-any` "fat" wheel on aarch64 that bundles
+  precompiled native libraries for select platforms, loaded dynamically
+  at runtime — but doesn't include a working aarch64 build inside it.
+  Installs cleanly, then fails at runtime with
+  `RuntimeError: cv_reader.read_video_cb not available`. No sdist is
+  published for this package at all, so there's no source to build from.
+
+So **neither backend works on GB200** with what's publicly accessible.
+A from-source aarch64 build of either would need access to their
+non-public source repos, which we don't have. All whole-dataset numbers
+above are from `A100x2` (x86_64) — see the [single-video
+results](#results-2026-09-09-a100x2) above for what fails and why on
+`gb200nvl72_preprod` specifically.
+
 <details>
 <summary><b>Reproduce</b> (Docker env, persistent GPU allocation, notes)</summary>
 
