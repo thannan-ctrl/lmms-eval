@@ -9,22 +9,25 @@ and Video-MME (1395 questions), Docker setup from `README.md`, 1 A100.
 
 **Codec is 6-7x slower end-to-end for basically no accuracy gain.**
 
-| Dataset | Backend | n | Accuracy | Tokens | Transcode | cv_preinfer | image_proc | other | **E2E** |
-|---|---|--:|--:|--:|--:|--:|--:|--:|--:|
-| EgoSchema | frames | 500 | 69.4% | 11760 | 0.00s | – | 0.09s | 0.02s | **3.81s** |
-| EgoSchema | codec | 500 | 69.6% | 11925 | 6.26s | 11.05s | 0.06s | 0.54s | **22.46s** |
-| Video-MME | frames | 1395 | 62.2% | 8998 | 0.00s | – | 0.08s | 0.02s | **3.26s** |
-| Video-MME | codec | 1395 | 63.2% | 9955 | 7.53s | 10.32s | 0.05s | 0.55s | **22.47s** |
+| Dataset | Backend | n | Accuracy | Tokens | Transcode | cv_preinfer | image_proc | other | ViT | LLM | **E2E** |
+|---|---|--:|--:|--:|--:|--:|--:|--:|--:|--:|--:|
+| EgoSchema | frames | 500 | 69.4% | 11760 | 0.00s | – | 0.09s | 0.02s | n/a | n/a | **3.81s** |
+| EgoSchema | codec | 500 | 69.6% | 11925 | 6.26s | 11.05s | 0.06s | 0.54s | n/a | n/a | **22.46s** |
+| Video-MME | frames | 1395 | 62.2% | 8998 | 0.00s | – | 0.08s | 0.02s | 0.02s* | 3.42s* | **3.26s** |
+| Video-MME | codec | 1395 | 63.2% | 9955 | 7.53s | 10.32s | 0.05s | 0.55s | 0.03s* | 4.25s* | **22.47s** |
+
+\* **Partial, not full-n.** ViT/LLM instrumentation was added partway
+through the run, so these two cells average only 26-27 of the 1395
+Video-MME samples (whichever ran after instrumentation landed);
+EgoSchema has none. Backfilling a real full-dataset split isn't
+possible after the fact — it requires re-running generation for all
+3790 units, since the split comes from timing the live forward pass.
 
 Accuracy moves ~0.2-1.0 points either way — noise, codec buys nothing.
 Two things drive the latency gap: (1) **transcode** — `cv-preinfer`
 needs H264/HEVC, so codec pays to `ffmpeg`-convert our `mpeg4` sources
 first (skipped if already H264/HEVC); (2) **`cv_preinfer` itself**
 (frame-selection, below) — the bigger cost, averaging 10-11s/video.
-
-(ViT/LLM split was only instrumented partway through — a 53-sample
-Video-MME partial, not full-scale: codec `vit=0.03s llm=4.25s`, frames
-`vit=0.02s llm=3.42s`.)
 
 ## What "512→64 canvases" actually means
 
