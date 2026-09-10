@@ -78,23 +78,24 @@ Same frames-vs-codec comparison, but run on every EgoSchema subset video
 accuracy this time. Script: `run_dataset_eval.py`, resumable via a JSONL
 checkpoint (see Reproduce below). Codec uses the same sampling method
 (`uniform_count`) and config (unscaled, identical for every video) as
-the single-video test above. **EgoSchema is done; Video-MME is ~85%
-through as of this snapshot — numbers below will keep shifting until it
-finishes.**
+the single-video test above. **EgoSchema is done; Video-MME is ~98%
+through as of this snapshot — numbers below will keep shifting slightly
+until it finishes.**
 
 | Dataset | Backend | n | Acc | E2E | Transcode | cv_preinfer | VLM |
 |---|---|--:|--:|--:|--:|--:|--:|
 | egoschema | frames | 500 | 69.4% | 3.81s | 0.00s | – | 3.47s |
 | egoschema | codec | 500 | 69.6% | 22.46s | 6.26s | 11.05s | 4.56s |
-| videomme | frames | 1180 | 65.4% | 3.18s | 0.00s | – | 2.87s |
-| videomme | codec | 1179 | 65.4% | 18.23s | 5.55s | 8.08s | 4.00s |
+| videomme | frames | 1366 | 62.5% | 3.24s | 0.00s | – | 2.91s |
+| videomme | codec | 1365 | 63.4% | 21.91s | 7.27s | 10.02s | 4.02s |
 
-At real scale, accuracy is a dead heat both datasets (69.4/69.6% on
-EgoSchema, 65.4/65.4% so far on Video-MME) — codec's extra latency buys
-nothing here. `cv_preinfer` also confirms what the single-video test
+At real scale, accuracy is a near-tie on both datasets (69.4/69.6% on
+EgoSchema, 62.5/63.4% on Video-MME) — codec's extra latency buys little
+to nothing here. `cv_preinfer` also confirms what the single-video test
 couldn't: it's *not* duration-independent in general — its average kept
 climbing as more (and longer/heavier) videos were sampled (0.49s on the
-one cherry-picked video → 11.05s average over all 500 EgoSchema videos).
+one cherry-picked video → 11.05s average over all 500 EgoSchema videos,
+10.02s over 1365 Video-MME videos).
 
 <details>
 <summary><b>Reproduce</b> (Docker env, persistent GPU allocation, notes)</summary>
