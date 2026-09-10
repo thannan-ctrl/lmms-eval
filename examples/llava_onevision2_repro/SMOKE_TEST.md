@@ -71,31 +71,36 @@ stage — codec's path never touches what `decord` does, and vice versa.
 
 (n=1 per cell — illustrative, not a real benchmark.)
 
-## Whole-dataset eval (in progress, last updated 2026-09-10)
+## Whole-dataset eval (complete, 2026-09-10)
 
 Same frames-vs-codec comparison, but run on every EgoSchema subset video
 (500) and every locally-available Video-MME question (1395), with
 accuracy this time. Script: `run_dataset_eval.py`, resumable via a JSONL
 checkpoint (see Reproduce below). Codec uses the same sampling method
 (`uniform_count`) and config (unscaled, identical for every video) as
-the single-video test above. **EgoSchema is done; Video-MME is ~98%
-through as of this snapshot — numbers below will keep shifting slightly
-until it finishes.**
+the single-video test above. **All 3790 (dataset, sample, backend)
+units finished.**
 
-| Dataset | Backend | n | Acc | E2E | Transcode | cv_preinfer | VLM |
-|---|---|--:|--:|--:|--:|--:|--:|
-| egoschema | frames | 500 | 69.4% | 3.81s | 0.00s | – | 3.47s |
-| egoschema | codec | 500 | 69.6% | 22.46s | 6.26s | 11.05s | 4.56s |
-| videomme | frames | 1366 | 62.5% | 3.24s | 0.00s | – | 2.91s |
-| videomme | codec | 1365 | 63.4% | 21.91s | 7.27s | 10.02s | 4.02s |
+| Dataset | Backend | n | Acc | Tokens | Transcode | cv_preinfer | image_processor | other | **E2E** |
+|---|---|--:|--:|--:|--:|--:|--:|--:|--:|
+| egoschema | frames | 500 | 69.4% | 11760 | 0.00s | – | 0.09s | 0.02s | **3.81s** |
+| egoschema | codec | 500 | 69.6% | 11925 | 6.26s | 11.05s | 0.06s | 0.54s | **22.46s** |
+| videomme | frames | 1395 | 62.2% | 8998 | 0.00s | – | 0.08s | 0.02s | **3.26s** |
+| videomme | codec | 1395 | 63.2% | 9955 | 7.53s | 10.32s | 0.05s | 0.55s | **22.47s** |
 
 At real scale, accuracy is a near-tie on both datasets (69.4/69.6% on
-EgoSchema, 62.5/63.4% on Video-MME) — codec's extra latency buys little
-to nothing here. `cv_preinfer` also confirms what the single-video test
-couldn't: it's *not* duration-independent in general — its average kept
-climbing as more (and longer/heavier) videos were sampled (0.49s on the
-one cherry-picked video → 11.05s average over all 500 EgoSchema videos,
-10.02s over 1365 Video-MME videos).
+EgoSchema, 62.2/63.2% on Video-MME) — codec's ~5.9x/6.9x extra E2E
+latency buys almost nothing here, on either dataset. `cv_preinfer` also
+confirms what the single-video test couldn't: it's *not*
+duration-independent in general — its average across the real datasets
+(11.05s EgoSchema, 10.32s Video-MME) is 20-25x the 0.49s measured on the
+one cherry-picked video.
+
+ViT/LLM split: only instrumented partway through this run (added mid-way,
+see commit history), so it's only available for the ~53 Video-MME
+samples computed after that point, not the full 1395 or any of EgoSchema
+— not a reliable full-dataset number. On that partial sample: codec
+`vit=0.03s, llm=4.25s`; frames `vit=0.02s, llm=3.42s`.
 
 ## Why this can't run on GB200 (aarch64)
 
