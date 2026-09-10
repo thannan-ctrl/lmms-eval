@@ -1,16 +1,22 @@
 #!/usr/bin/env python3
-"""Generates codec_canvas_concept.png: an exact, step-by-step schematic
-of cv-preinfer's frame selection and packing:
+"""Generates codec_canvas_concept.png: a step-by-step schematic of
+cv-preinfer's frame selection, grounded in what the checkpoint's own
+codec_video_processing_llava_onevision2.py confirms (not guessed):
 
   1) uniformly sample 512 candidate frames, split into 16 groups of 32
+     (`num_sampled_frames() = (target_canvas//images_per_group)*group_size`)
   2) score each group's 32 frames by bit-cost/motion-vector "readiness",
-     keep the best 4
-  3) pack those 4 kept frames into 1 canvas (2x2 grid)
-  4) repeat for all 16 groups -> 64 canvases total -> fed to the VLM
+     keep the best 4 -- each kept frame becomes its OWN canvas (NOT a
+     multi-frame packed collage: `drop_padding_canvases` treats each
+     canvas as having one uniform timestamp across all its patches,
+     confirming one frame per canvas)
+  3) repeat for all 16 groups -> 4 canvases/group x 16 groups = 64
+     canvases total -> fed to the VLM
+     (`expected_canv = (usable_frames//group_size)*images_per_group`
+     confirms the per-group canvas count directly)
 
 Uses the default config (target_canvas=64, group_size=32,
-images_per_group=4): num_sampled_frames = (64//4)*32 = 512,
-16 groups (=64/4) of 32 frames each, 4 kept per group (=64/16).
+images_per_group=4).
 
 No GPU/model needed -- pure illustration from already-documented
 mechanics (see SMOKE_TEST.md).
@@ -72,14 +78,15 @@ def main():
     ax1.text((gx0 + gx1) / 2, 0.15,
              "16 groups × 32 frames each = 512 candidate frames total (spread evenly across the video)",
              ha="center", fontsize=7.5, color=TEXT_SECONDARY)
-    arrow(ax1, gx0 + 5 * gw + gw * 0.44, 0.5, gx0 + 5 * gw + gw * 0.44, 0.05)
+    ax1.text(gx0 + 5 * gw + gw * 0.44, 0.3, "zoom in ↓", ha="center", fontsize=6.5,
+              color=TEXT_SECONDARY, style="italic")
 
     # ---- Panel 2: zoom into one group of 32 -> keep best 4 ----
     ax2 = fig.add_axes((0.04, 0.40, 0.55, 0.26))
     ax2.set_xlim(0, 10)
     ax2.set_ylim(0, 2.6)
     ax2.axis("off")
-    ax2.text(0.0, 2.4, 'Score all 32 frames in a group by "readiness",',
+    ax2.text(0.0, 2.4, '2) Score all 32 frames in a group by "readiness",',
              fontsize=9, fontweight="bold", color=TEXT_PRIMARY, ha="left")
     ax2.text(0.0, 2.1, "keep the best 4 (bit-cost + motion-vector signal)",
              fontsize=9, fontweight="bold", color=TEXT_PRIMARY, ha="left")
@@ -103,18 +110,22 @@ def main():
 
     arrow(ax2, 9.3, 1.0, 9.9, 1.0)
 
-    # ---- Panel 3: pack the 4 kept frames into 1 canvas ----
+    # ---- Panel 3: each of the 4 kept frames becomes its OWN canvas
+    # (confirmed: drop_padding_canvases treats each canvas as having one
+    # uniform timestamp across all its patches -- one frame per canvas,
+    # not a multi-frame packed collage).
     ax3 = fig.add_axes((0.62, 0.40, 0.34, 0.26))
     ax3.set_xlim(0, 5)
     ax3.set_ylim(0, 2.6)
     ax3.axis("off")
-    ax3.text(0.0, 2.5, "3) Pack 4 kept frames", fontsize=8.7, fontweight="bold", color=TEXT_PRIMARY, ha="left", va="top")
-    ax3.text(0.0, 2.25, "into 1 canvas image", fontsize=8.7, fontweight="bold", color=TEXT_PRIMARY, ha="left", va="top")
-    cs = 0.8
-    for x, y in [(0.6, 1.0), (1.6, 1.0), (0.6, 0.15), (1.6, 0.15)]:
-        ax3.add_patch(Rectangle((x, y), cs, cs, facecolor=ORANGE, edgecolor=SURFACE, linewidth=1.5, zorder=2))
-    ax3.add_patch(Rectangle((0.55, 0.10), 2 * cs + 0.1, 2 * cs + 0.1, fill=False, edgecolor=AQUA, linewidth=2, zorder=1))
-    ax3.text(1.6, -0.25, "1 canvas\n(grid of 4 frames)", ha="center", fontsize=7.5, color=TEXT_SECONDARY)
+    ax3.text(0.0, 2.5, "3) Each kept frame", fontsize=8.7, fontweight="bold", color=TEXT_PRIMARY, ha="left", va="top")
+    ax3.text(0.0, 2.25, "becomes its own canvas", fontsize=8.7, fontweight="bold", color=TEXT_PRIMARY, ha="left", va="top")
+    cs = 0.55
+    canvas_positions = [(0.3, 1.4), (1.15, 1.4), (2.0, 1.4), (2.85, 1.4)]
+    for x, y in canvas_positions:
+        ax3.add_patch(Rectangle((x, y), cs, cs, fill=False, edgecolor=AQUA, linewidth=1.8, zorder=1))
+        ax3.add_patch(Rectangle((x + 0.08, y + 0.08), cs - 0.16, cs - 0.16, facecolor=ORANGE, edgecolor=SURFACE, linewidth=1, zorder=2))
+    ax3.text(1.7, 0.9, "4 canvases,\none frame each", ha="center", fontsize=7.5, color=TEXT_SECONDARY)
 
     # ---- Panel 4: repeat x16 -> 64 canvases -> VLM ----
     ax4 = fig.add_axes((0.04, 0.06, 0.92, 0.26))
@@ -136,7 +147,7 @@ def main():
     arrow(ax4, 6.9, 1.0, 7.5, 1.0)
     box(ax4, 7.6, 0.55, 2.3, 0.9, "fed to VLM\n(llava_onevision2)", TEXT_PRIMARY, fontsize=8.5)
 
-    fig.suptitle('What "512→64 canvases" actually means: from candidate frames to packed canvases',
+    fig.suptitle('What "512→64 canvases" actually means: from candidates to selected frames',
                  x=0.02, y=0.995, ha="left", fontsize=13, fontweight="bold", color=TEXT_PRIMARY)
 
     out_png = Path(__file__).parent / "codec_canvas_concept.png"

@@ -4,9 +4,9 @@ Quick check: does `llava_onevision2` actually run end-to-end, and how
 much slower is the "codec" way of feeding it video vs. the plain
 "frames" way? Ran on one EgoSchema video (3 min) and one Video-MME video
 (74s), each two ways — `frames` (sample 64 frames, feed them straight
-in) and `codec` (pack frames into composite "canvas" images first, via
-a separate tool called `cv-preinfer`), in the exact Docker setup from
-`README.md`.
+in) and `codec` (score candidate frames by codec bit-cost/motion signal
+and keep the best 64 as individual "canvas" images, via a separate tool
+called `cv-preinfer`), in the exact Docker setup from `README.md`.
 
 ## Results (2026-09-09, A100x2)
 
@@ -36,8 +36,12 @@ hands it a video, it doesn't pick frames itself. In one call it:
    codec's own compression decisions already mark where the
    information-dense parts of a video are, so reuse that instead of
    redoing the analysis from scratch).
-3. Keeps the best-scoring **64 frames** (4 out of every 32-frame group),
-   fully decodes just those, and packs them into canvas images.
+3. Keeps the best-scoring **64 frames** (4 out of every 32-frame group)
+   and fully decodes just those — each kept frame becomes its own canvas
+   image, one frame per canvas, confirmed by `drop_padding_canvases`
+   treating every canvas as having one uniform timestamp across all its
+   patches (not a multi-frame packed collage, despite "canvas packing"
+   sounding like one).
 
 Two separate video decodes happen in this pipeline, in two different
 tools that share no work: `ffmpeg` decodes the original `mpeg4` and
@@ -108,22 +112,27 @@ Not a model or GPU-support restriction — the model card publishes no
 GPU compatibility list, and `transformers`/`torch`/CUDA all run fine on
 GB200. The blocker is entirely in two auxiliary tools this pipeline
 depends on, both of which only ship precompiled native binaries for
-x86_64 (no aarch64 build, no publicly available source to build one):
+x86_64:
 
 - **`decord`** (frames backend, via `qwen_vl_utils.fetch_video`): no
   Linux aarch64 wheels on PyPI. `eva-decord` (a common substitute)
   doesn't cover Linux aarch64 either — only macOS and Linux x86_64/Windows.
+  Unlike the tool below, **decord's source is public**
+  ([github.com/dmlc/decord](https://github.com/dmlc/decord)) — a
+  from-source aarch64 build is plausible in principle (not attempted
+  here), which would only fix the `frames`/dense side.
 - **`codec-video-prep-legacy-exact`** (codec backend's `cv-preinfer`
   tool): resolves to a `py3-none-any` "fat" wheel on aarch64 that bundles
   precompiled native libraries for select platforms, loaded dynamically
   at runtime — but doesn't include a working aarch64 build inside it.
   Installs cleanly, then fails at runtime with
-  `RuntimeError: cv_reader.read_video_cb not available`. No sdist is
-  published for this package at all, so there's no source to build from.
+  `RuntimeError: cv_reader.read_video_cb not available`. **No sdist is
+  published for this package anywhere** — this one is a genuine dead
+  end without access to its non-public source.
 
-So **neither backend works on GB200** with what's publicly accessible.
-A from-source aarch64 build of either would need access to their
-non-public source repos, which we don't have. All whole-dataset numbers
+So **codec is blocked on GB200 with no viable path from public
+packages alone** — decord could plausibly be source-built for `frames`,
+but `codec-video-prep-legacy-exact` cannot. All whole-dataset numbers
 above are from `A100x2` (x86_64) — see the [single-video
 results](#results-2026-09-09-a100x2) above for what fails and why on
 `gb200nvl72_preprod` specifically.
