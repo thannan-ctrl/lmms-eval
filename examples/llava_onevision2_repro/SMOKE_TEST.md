@@ -16,18 +16,15 @@ and Video-MME (1395 questions), Docker setup from `README.md`, 1 A100.
 | Video-MME | frames | 1395 | 62.2% | 8998 | 0.00s | – | 0.08s | 0.02s | 0.02s* | 3.42s* | **3.26s** |
 | Video-MME | codec | 1395 | 63.2% | 9955 | 7.53s | 10.32s | 0.05s | 0.55s | 0.03s* | 4.25s* | **22.47s** |
 
-\* **Partial, not full-n.** ViT/LLM instrumentation was added partway
-through the run, so these two cells average only 26-27 of the 1395
-Video-MME samples (whichever ran after instrumentation landed);
-EgoSchema has none. Backfilling a real full-dataset split isn't
-possible after the fact — it requires re-running generation for all
-3790 units, since the split comes from timing the live forward pass.
+\* Partial: ViT/LLM instrumentation landed mid-run, so these cells cover
+only 26-27/1395 Video-MME samples (EgoSchema: none). Can't backfill —
+timing the forward pass needs a real re-run of all 3790 units.
 
 Accuracy moves ~0.2-1.0 points either way — noise, codec buys nothing.
-Two things drive the latency gap: (1) **transcode** — `cv-preinfer`
-needs H264/HEVC, so codec pays to `ffmpeg`-convert our `mpeg4` sources
-first (skipped if already H264/HEVC); (2) **`cv_preinfer` itself**
-(frame-selection, below) — the bigger cost, averaging 10-11s/video.
+Two things drive the latency gap: **transcode** (`cv-preinfer` needs
+H264/HEVC, so codec `ffmpeg`-converts our `mpeg4` sources first — skipped
+if already H264/HEVC) and **`cv_preinfer` itself** (frame-selection,
+below), the bigger cost at 10-11s/video.
 
 ## What "512→64 canvases" actually means
 
@@ -45,17 +42,15 @@ discarded frames. One call:
    decodes only those. Each kept frame becomes its own canvas — one
    frame per canvas, not a multi-frame collage.
 
-**Not the LLaVA-OneVision-2 companion paper's method** — same idea (a
-codec's compression decisions already mark information-dense content,
-so reuse them), different mechanism. Checked against the paper
-([*OneVision-Encoder: Codec-Aligned
+**Not the LLaVA-OneVision-2 companion paper's method** — same idea
+(reuse the codec's own compression decisions), different mechanism.
+Checked against the paper ([*OneVision-Encoder: Codec-Aligned
 Sparsity*](https://arxiv.org/abs/2602.08683)) and its
 [official code](https://github.com/EvolvingLMMs-Lab/OneVision-Encoder):
-the paper sparsifies **patches within frames** using **HEVC** (I-frame
-patches all kept, P-frame patches pruned to a fixed budget — no frame
-ever fully dropped); `cv-preinfer` drops **whole frames** using **H264**
-(64 of 512, full patch grid on survivors), sharing no code/terminology
-with the paper.
+it sparsifies **patches within frames** using **HEVC** (I-frames kept
+whole, P-frame patches pruned to a fixed budget — no frame ever fully
+dropped); `cv-preinfer` drops **whole frames** using **H264** (64 of
+512), sharing no code/terminology with the paper.
 
 **Quirks:**
 - `cv_preinfer` cost is **not duration-independent** — one cherry-picked
@@ -93,17 +88,16 @@ taller cost 3.7x more here.
 
 ## Why this can't run on GB200 (aarch64)
 
-Not a model/GPU-support restriction — `transformers`/`torch`/CUDA run
-fine on GB200. Two auxiliary tools only ship precompiled x86_64
-binaries:
+Not a model/GPU restriction — `transformers`/`torch`/CUDA run fine on
+GB200. Two auxiliary tools only ship precompiled x86_64 binaries:
 
-- **`decord`** (frames): no Linux aarch64 wheels (nor `eva-decord`).
-  Source **is** public ([dmlc/decord](https://github.com/dmlc/decord)),
-  so a from-source build is plausible — not attempted here.
+- **`decord`** (frames): no Linux aarch64 wheels. Source **is** public
+  ([dmlc/decord](https://github.com/dmlc/decord)), so a from-source
+  build is plausible — not attempted here.
 - **`codec-video-prep-legacy-exact`** (`cv-preinfer`): installs on
   aarch64 but fails at runtime (`RuntimeError: cv_reader.read_video_cb
-  not available`) — the aarch64 wheel is missing its native backend,
-  and **no source distribution exists anywhere**. Genuine dead end.
+  not available`) — no native backend, and **no source distribution
+  exists anywhere**. Genuine dead end.
 
 Codec has no viable public path on GB200; frames might, with effort.
 All numbers above are from a single A100 (x86_64).
@@ -144,10 +138,9 @@ srun --jobid=$JOBID bash -c '
 ```
 
 Non-obvious flags: `--partition=A100x2` not `gb200nvl72_preprod`
-(aarch64 lacks `decord`/`cv-preinfer`; `--gres=gpu:1` still only
-requests 1 GPU — `A100x2` is just the partition's name);
-`--user $(id -u):$(id -g) -e HOME=/tmp` (NFS
-root-squash blocks root writing the mount); `-e
+(aarch64 lacks `decord`/`cv-preinfer`; it's just the partition's name,
+`--gres=gpu:1` still requests only 1 GPU); `--user $(id -u):$(id -g)
+-e HOME=/tmp` (NFS root-squash blocks root writing the mount); `-e
 LLAVA_CODEC_ONLINE_TUNED=1` (routes to the pinned
 `codec-video-prep-legacy-exact` CLI instead of the README-forbidden
 `codec-video-prep`).
