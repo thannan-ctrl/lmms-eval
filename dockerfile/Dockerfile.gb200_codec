@@ -1,0 +1,56 @@
+FROM nvcr.io/nvidia/pytorch:25.04-py3
+
+# aarch64 (GB200) variant of dockerfile/Dockerfile for the codec backend
+# ONLY: decord dropped from the pip install list because it has no
+# Linux aarch64 wheels on PyPI (and eva-decord doesn't either -- macOS
+# and x86_64/Windows only). The codec backend never imports decord (see
+# examples/llava_onevision2_repro/SMOKE_TEST.md); the frames backend
+# would need it and is NOT expected to work from this image.
+# Everything else is identical to dockerfile/Dockerfile.
+
+ENV DEBIAN_FRONTEND=noninteractive \
+    PYTHONUNBUFFERED=1 \
+    PIP_NO_CACHE_DIR=1
+
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    libgl1 \
+    libglib2.0-0 \
+    curl \
+    ca-certificates \
+    xz-utils \
+    git \
+    libsm6 \
+    libxext6 \
+    libxrender-dev \
+    libavcodec-dev \
+    libavformat-dev \
+    libswscale-dev \
+    ffmpeg \
+    && apt-get clean \
+    && rm -rf /var/lib/apt/lists/* /var/cache/apt/archives/*
+
+WORKDIR /workspace
+ENV PYTHONPATH=/workspace/lmms-eval
+
+RUN env -u PIP_CONSTRAINT pip install --no-cache-dir --upgrade pip setuptools wheel && \
+    env -u PIP_CONSTRAINT pip install --no-cache-dir --no-deps \
+        peft accelerate datasets evaluate sentence_transformers && \
+    env -u PIP_CONSTRAINT pip install --no-cache-dir \
+        "numpy<2" \
+        "transformers==5.7.0" "qwen-vl-utils==0.0.14" \
+        multiprocess dill xxhash pyarrow fsspec huggingface_hub \
+        httpx jsonlines aiohttp numexpr \
+        pytablewriter sacrebleu sqlitedict timm einops ftfy openai \
+        opencv-python-headless "av<16.0.0" hf_transfer nltk sentencepiece \
+        yt-dlp tqdm-multiprocess transformers-stream-generator \
+        zstandard pyyaml sympy latex2sympy2 mpmath Jinja2 openpyxl loguru \
+        tenacity wandb tiktoken pydantic packaging zss protobuf \
+        python-dotenv \
+        fastapi uvicorn more-itertools editdistance librosa soundfile \
+        spacy anls rouge Levenshtein google-generativeai \
+        duckduckgo_search langchain langchain-community beautifulsoup4 python-multipart \
+        trimesh scipy shapely && \
+    env -u PIP_CONSTRAINT pip install --no-cache-dir flash-attn --no-build-isolation && \
+    rm -rf ~/.cache/pip /tmp/* /root/.cache
+
+CMD ["/bin/bash"]
