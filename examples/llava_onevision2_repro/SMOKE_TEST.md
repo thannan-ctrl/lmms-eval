@@ -30,18 +30,28 @@ hands it a video, it doesn't pick frames itself. In one call it:
 1. Uniformly samples **512 candidate frames** from the video.
 2. Scores each one for "readiness" using **bit-cost and motion-vector
    data read straight from the H264 bitstream** — no full pixel decode
-   needed for scoring, which is why it only accepts H264/HEVC input
-   (per the companion paper, [*OneVision-Encoder: Codec-Aligned
-   Sparsity*](https://arxiv.org/abs/2602.08683) — the idea is that a
-   codec's own compression decisions already mark where the
-   information-dense parts of a video are, so reuse that instead of
-   redoing the analysis from scratch).
+   needed for scoring, which is why it only accepts H264/HEVC input.
 3. Keeps the best-scoring **64 frames** (4 out of every 32-frame group)
    and fully decodes just those — each kept frame becomes its own canvas
    image, one frame per canvas, confirmed by `drop_padding_canvases`
    treating every canvas as having one uniform timestamp across all its
    patches (not a multi-frame packed collage, despite "canvas packing"
    sounding like one).
+
+**This is *not* the LLaVA-OneVision-2 companion paper's method** — it
+just reuses the same general idea (a codec's own compression decisions
+already mark where a video's information-dense content is, so reuse
+that instead of a separate analysis pass). Checked directly against the
+paper ([*OneVision-Encoder: Codec-Aligned
+Sparsity*](https://arxiv.org/abs/2602.08683)) and its official code
+([github.com/EvolvingLMMs-Lab/OneVision-Encoder](https://github.com/EvolvingLMMs-Lab/OneVision-Encoder)):
+the paper sparsifies **patches within frames** (keeps every patch on
+I-frames, prunes P-frame patches to a fixed 2,048-token budget per
+64-frame clip — no frame is ever dropped as a whole unit) using
+**HEVC**; `cv-preinfer` drops **whole frames** (keeps 64 of 512, full
+patch grid on survivors) using **H264**, and shares no code or
+terminology with either the paper or its repo (`readiness`, `bitcost`,
+`canvas`, `group_size` appear in neither).
 
 Two separate video decodes happen in this pipeline, in two different
 tools that share no work: `ffmpeg` decodes the original `mpeg4` and

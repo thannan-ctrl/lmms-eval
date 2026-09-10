@@ -197,9 +197,9 @@ def main():
     )
     fig.text(
         0.03, 0.02,
-        "Figure. cv-preinfer (codec-video-prep-legacy-exact) selects whole frames, not patches -- a different,\n"
-        "simpler mechanism than the OneVision-Encoder paper's patch-level codec-aligned sparsity (arXiv:2602.08683).\n"
-        "Config: target_canvas=64, group_size=32, images_per_group=4 -> 512 candidates, 16 groups, 4 kept/group.",
+        "Figure. cv-preinfer (codec-video-prep-legacy-exact) drops whole frames using H264 -- distinct from the\n"
+        "OneVision-Encoder paper's method (arXiv:2602.08683, github.com/EvolvingLMMs-Lab/OneVision-Encoder), which\n"
+        "sparsifies patches within HEVC frames (I-frames kept whole) and shares no code/terminology with this tool.",
         fontsize=7.6, color=TEXT_SECONDARY, ha="left", va="bottom",
     )
 
