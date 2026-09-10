@@ -1,43 +1,35 @@
 # Frames vs. codec: does `llava_onevision2` run, and is codec worth it?
 
-`llava_onevision2` can feed video to the model two ways: **`frames`**
-(sample 64 frames evenly, feed them straight in) or **`codec`** (use a
-separate tool, `cv-preinfer`, to pick the 64 "best" frames using signals
-already sitting in the video's H264 encoding, instead of sampling
-blindly). Ran both, on EgoSchema (500 videos) and Video-MME (1395
-questions), in the exact Docker setup from `README.md` on `A100x2`.
+`llava_onevision2` feeds video to the model two ways: **`frames`**
+(sample 64 frames evenly) or **`codec`** (use a separate tool,
+`cv-preinfer`, to pick the 64 "best" frames from signals already in the
+video's H264 encoding). Ran both on EgoSchema (500 videos) and
+Video-MME (1395 questions), in the Docker setup from `README.md` on
+`A100x2`.
 
 ## TL;DR
 
 **Codec is 6-7x slower end-to-end for basically no accuracy gain.**
 
-| Dataset | Backend | n | Accuracy | **E2E latency/sample** |
-|---|---|--:|--:|--:|
-| EgoSchema | frames | 500 | 69.4% | **3.81s** |
-| EgoSchema | codec | 500 | 69.6% | **22.46s** |
-| Video-MME | frames | 1395 | 62.2% | **3.26s** |
-| Video-MME | codec | 1395 | 63.2% | **22.47s** |
+| Dataset | Backend | n | Accuracy | Tokens | Transcode | cv_preinfer | image_proc | other | **E2E** |
+|---|---|--:|--:|--:|--:|--:|--:|--:|--:|
+| EgoSchema | frames | 500 | 69.4% | 11760 | 0.00s | – | 0.09s | 0.02s | **3.81s** |
+| EgoSchema | codec | 500 | 69.6% | 11925 | 6.26s | 11.05s | 0.06s | 0.54s | **22.46s** |
+| Video-MME | frames | 1395 | 62.2% | 8998 | 0.00s | – | 0.08s | 0.02s | **3.26s** |
+| Video-MME | codec | 1395 | 63.2% | 9955 | 7.53s | 10.32s | 0.05s | 0.55s | **22.47s** |
 
-Accuracy moves by ~0.2-1.0 points either way (noise-level for this n) —
-codec buys almost nothing here. Full latency breakdown:
-
-| Dataset | Backend | Tokens | Transcode | cv_preinfer | image_proc | other | **E2E** |
-|---|---|--:|--:|--:|--:|--:|--:|
-| egoschema | frames | 11760 | 0.00s | – | 0.09s | 0.02s | **3.81s** |
-| egoschema | codec | 11925 | 6.26s | 11.05s | 0.06s | 0.54s | **22.46s** |
-| videomme | frames | 8998 | 0.00s | – | 0.08s | 0.02s | **3.26s** |
-| videomme | codec | 9955 | 7.53s | 10.32s | 0.05s | 0.55s | **22.47s** |
+Accuracy moves by ~0.2-1.0 points either way — noise-level, codec buys
+almost nothing.
 
 Two things drive nearly all of the gap:
-1. **Transcode** — `cv-preinfer` only accepts H264/HEVC; our source
-   videos are old-format `mpeg4`, so every codec run pays for an `ffmpeg`
-   conversion first (skipped entirely if your video is already
-   H264/HEVC).
-2. **`cv_preinfer` itself** (the frame-selection step below) — this is
-   the real cost, averaging 10-11s/video, way more than transcoding.
+1. **Transcode** — `cv-preinfer` only accepts H264/HEVC, so codec pays
+   for an `ffmpeg` conversion of our `mpeg4` source videos first
+   (skipped if the video is already H264/HEVC).
+2. **`cv_preinfer` itself**, the frame-selection step below — the real
+   cost, averaging 10-11s/video, far more than transcoding.
 
-(ViT/LLM only got instrumented partway through this run, so it's just a
-53-sample partial for Video-MME, not reliable at full scale: codec
+(ViT/LLM split was only instrumented partway through the run — a
+53-sample Video-MME partial, not a reliable full-scale number: codec
 `vit=0.03s llm=4.25s`, frames `vit=0.02s llm=3.42s`.)
 
 ## What "512→64 canvases" actually means
@@ -45,50 +37,45 @@ Two things drive nearly all of the gap:
 ![how codec picks its canvases](codec_canvas_concept.png)
 
 `cv-preinfer` (package `codec-video-prep-legacy-exact`) is a separate
-tool this repo shells out to — it does the picking, not the model. One
-call does:
+tool this repo shells out to for the picking — the model itself never
+sees the discarded frames. One call:
 
-1. Uniformly sample **512 candidate frames** from the video.
-2. Score each one for "readiness" using **bit-cost and motion-vector
-   data read straight from the H264 bitstream** — no full pixel decode
-   needed to score a frame, which is also why the tool needs H264/HEVC
-   input specifically.
-3. Keep the best-scoring **64 frames** (4 out of every 32-frame group)
-   and fully decode just those. Each kept frame becomes its own canvas
-   image — one frame per canvas, not a multi-frame collage (confirmed by
-   how the checkpoint code stamps one uniform timestamp per canvas).
+1. Uniformly samples **512 candidate frames**.
+2. Scores each for "readiness" from **bit-cost and motion-vector data
+   read straight from the H264 bitstream** — no pixel decode needed to
+   score a frame, hence the H264/HEVC-only requirement.
+3. Keeps the best **64 frames** (4 of every 32-frame group) and fully
+   decodes just those. Each kept frame becomes its own canvas image —
+   one frame per canvas, not a multi-frame collage (confirmed by the
+   checkpoint code stamping one uniform timestamp per canvas).
 
-**This is *not* the LLaVA-OneVision-2 companion paper's method.** It
-reuses the same general idea — a codec's own compression decisions
-already mark where a video's information-dense content is, so reuse
-that instead of a separate analysis pass — but a different mechanism
-entirely. Checked directly against the paper ([*OneVision-Encoder:
-Codec-Aligned Sparsity*](https://arxiv.org/abs/2602.08683)) and its
-official code
-([github.com/EvolvingLMMs-Lab/OneVision-Encoder](https://github.com/EvolvingLMMs-Lab/OneVision-Encoder)):
-the paper sparsifies **patches within frames** (every I-frame patch
-kept, P-frame patches pruned to a fixed budget — no frame ever dropped
-as a whole unit) using **HEVC**. `cv-preinfer` drops **whole frames**
-(keeps 64 of 512, full patch grid on survivors) using **H264**, and
-shares no code or terminology with the paper or its repo (`readiness`,
-`bitcost`, `canvas`, `group_size` appear in neither).
+**Not the LLaVA-OneVision-2 companion paper's method** — same general
+idea (a codec's compression decisions already mark information-dense
+content, so reuse them), different mechanism. Checked against the paper
+([*OneVision-Encoder: Codec-Aligned
+Sparsity*](https://arxiv.org/abs/2602.08683)) and its
+[official code](https://github.com/EvolvingLMMs-Lab/OneVision-Encoder):
+the paper sparsifies **patches within frames** (I-frame patches all
+kept, P-frame patches pruned to a fixed budget — no frame ever fully
+dropped) using **HEVC**. `cv-preinfer` drops **whole frames** (64 of
+512, full patch grid on survivors) using **H264**, sharing no
+code/terminology with the paper (`readiness`, `bitcost`, `canvas`,
+`group_size` appear in neither).
 
-Also: two separate, unrelated decodes happen across the two backends.
-`ffmpeg` decodes the original `mpeg4` and re-encodes to H264 for
-codec's `transcode` step, while `decord` separately decodes the
-*original* `mpeg4` for frames' `fetch_video` step — neither backend's
-decode touches the other's.
+Also, two unrelated decodes happen across the backends: `ffmpeg`
+decodes+re-encodes `mpeg4`→H264 for codec's transcode step, while
+`decord` decodes the *original* `mpeg4` for frames' `fetch_video` step —
+neither touches the other's work.
 
-**Other quirks worth knowing:**
-- `cv_preinfer`'s cost is **not duration-independent** — a single cherry-picked
-  video made it look flat (~0.5s), but across the real datasets it
-  averages 20-25x higher (10-11s), varying a lot sample to sample.
-- The "512 candidates" figure barely shrinks with video length (only
-  drops below ~17s videos) — so scanning candidates gets slower on
-  longer videos even though the final canvas count stays 64.
-- `--num-frames` does nothing for codec — that flag only controls the
-  `frames` path. Codec's canvas count is set separately, via
-  `--codec-target-canvas`.
+**Quirks worth knowing:**
+- `cv_preinfer` cost is **not duration-independent** — one cherry-picked
+  video looked flat (~0.5s), but across real datasets it averages
+  20-25x higher (10-11s), varying a lot sample to sample.
+- The 512-candidate count barely shrinks with video length (only below
+  ~17s), so scanning candidates still gets slower on longer videos even
+  though the final canvas count stays 64.
+- `--num-frames` does nothing for codec — only the `frames` path.
+  Codec's size is set separately, via `--codec-target-canvas`.
 
 (Single-video numbers below are illustrative, n=1 per cell — the table
 above, from the full 500/1395-sample run, is the real comparison.)
@@ -113,22 +100,19 @@ also a bit taller cost 3.7x more here.
 
 ## Why this can't run on GB200 (aarch64)
 
-Not a model/GPU-support restriction — no GPU compatibility list is
-published, and `transformers`/`torch`/CUDA all run fine on GB200. The
-blocker is two auxiliary tools that only ship precompiled x86_64
-binaries:
+Not a model/GPU-support restriction — `transformers`/`torch`/CUDA all
+run fine on GB200. The blocker is two auxiliary tools that only ship
+precompiled x86_64 binaries:
 
-- **`decord`** (frames backend): no Linux aarch64 wheels on PyPI (or
-  from the common substitute `eva-decord`). Its source **is** public
+- **`decord`** (frames backend): no Linux aarch64 wheels (nor from the
+  `eva-decord` substitute). Source **is** public
   ([github.com/dmlc/decord](https://github.com/dmlc/decord)), so a
-  from-source aarch64 build is plausible in principle — not attempted
-  here.
-- **`codec-video-prep-legacy-exact`** (codec backend's `cv-preinfer`):
-  installs fine on aarch64 but fails at runtime with `RuntimeError:
-  cv_reader.read_video_cb not available` — its aarch64 wheel is a
-  fallback that's missing the native backend, and **no source
-  distribution is published anywhere** for this package. Genuine dead
-  end without non-public source access.
+  from-source aarch64 build is plausible — not attempted here.
+- **`codec-video-prep-legacy-exact`** (`cv-preinfer`): installs on
+  aarch64 but fails at runtime (`RuntimeError: cv_reader.read_video_cb
+  not available`) — its aarch64 wheel is missing the native backend,
+  and **no source distribution exists anywhere**. Genuine dead end
+  without non-public source access.
 
 So codec has no viable public path on GB200 today; frames might, with
 effort. All numbers above are from `A100x2` (x86_64).
